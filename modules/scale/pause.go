@@ -1,6 +1,9 @@
 package modules
 
 import (
+	"fmt"
+	"time"
+
 	internalapi "k8s.io/cri-api/pkg/apis"
 
 	mod "elastic/modules"
@@ -24,6 +27,7 @@ func AppendPauseContainerList(pauseContainerList []global.PauseContainer, contai
 	pauseContainer.ContainerName = container.ContainerName
 	pauseContainer.ContainerId = container.ContainerId
 	pauseContainer.ContainerData = container.ContainerData
+	pauseContainer.Timestamp = time.Now().Unix()
 
 	pauseContainerList = append(pauseContainerList, pauseContainer)
 
@@ -31,11 +35,13 @@ func AppendPauseContainerList(pauseContainerList []global.PauseContainer, contai
 }
 
 func PauseContainer(client internalapi.RuntimeService, pauseCandicate *global.ContainerData) {
+	fmt.Println("Pause")
 	pauseCandicate.OriginalContainerData.Linux.CpuQuota = global.LIMIT_CPU_QUOTA
 	mod.UpdateContainerResources(client, pauseCandicate.Id, pauseCandicate.OriginalContainerData)
 }
 
 func ContinueContainer(client internalapi.RuntimeService, continueCandicate *global.ContainerData) {
+	fmt.Println("Continue")
 	continueCandicate.OriginalContainerData.Linux.CpuQuota = global.DEFAULT_CPU_QUOTA
 	mod.UpdateContainerResources(client, continueCandicate.Id, continueCandicate.OriginalContainerData)
 }

@@ -3,6 +3,7 @@ package modules
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -10,28 +11,46 @@ import (
 
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	internalapi "k8s.io/cri-api/pkg/apis"
 	pb "k8s.io/cri-api/pkg/apis/runtime/v1"
 
 	global "elastic/modules/global"
 )
 
-func GetListPodStatsInfo(client internalapi.RuntimeService) []*pb.PodSandboxStats {
-	for {
-		stats, err := client.ListPodSandboxStats(context.TODO(), &pb.PodSandboxStatsFilter{})
-		if err != nil {
-			fmt.Println(err)
-			return stats
-		} else {
-			return stats
-		}
-	}
+type ResultPodData struct {
+	PodName      string
+	StartTime    int64
+	StartedAt    int64
+	FinishedAt   int64
+	RunningTime  int64
+	WaitTime     int64
+	RemoveTime   int64
+	RestartCount int32
 }
 
-func GetPodStatsInfo(client internalapi.RuntimeService, podIndex map[string]int64, podInfoSet []global.PodData, currentRunningPods []string) ([]global.PodData, []string) {
+func GetListPodStatsInfo(client internalapi.RuntimeService) ([]*pb.PodSandboxStats, error) {
 
-	listPodStats := GetListPodStatsInfo(client)
+	stats, err := client.ListPodSandboxStats(context.TODO(), &pb.PodSandboxStatsFilter{})
+	if err != nil {
+		fmt.Println(err)
+	}
+	return stats, err
+}
+
+func GetPodStatsInfo(client internalapi.RuntimeService, systemInfoSet []global.SystemInfo, podIndex map[string]int64, podInfoSet []global.PodData, currentRunningPods []string,
+	checkpointContainerList []global.CheckpointContainer, removeContainerList []global.CheckpointContainer, avgCheckpointTime []global.CheckpointTime,
+	avgRepairTime []global.RepairTime, avgRemoveTime []global.RemoveTime, resultChan chan global.CheckpointContainer) ([]global.PodData, []string) {
+
 	isPodRunning := false
+
+	listPodStats, err := GetListPodStatsInfo(client)
+	if err != nil {
+		return podInfoSet, currentRunningPods // See currentRunningPods from the previous round
+	}
+
+	currentRunningPods = nil // initialize currentRunningPods
 
 	for _, podStats := range listPodStats {
 		podName := podStats.Attributes.Metadata.Name
@@ -40,16 +59,17 @@ func GetPodStatsInfo(client internalapi.RuntimeService, podIndex map[string]int6
 		if podStats.Attributes.Metadata.Namespace != "default" {
 			continue
 		}
-		isPodRunning = true
 
-		// Do not store info of notworking pods
+		// Do not store info of not working pods
 		status, _ := client.PodSandboxStatus(context.TODO(), podStats.Attributes.Id, false)
 		if status == nil { // exception handling: nil pointer
 			continue
 		}
+		// Do not store info of complete pods
 		if status.Status.State == 1 { // exception handling: SANDBOX_NOTREADY
 			continue
 		}
+		isPodRunning = true
 
 		/*
 			if len(podStats.Linux.Containers) == 0 { // exception handling: pod is created, but it not have containers
@@ -66,12 +86,19 @@ func GetPodStatsInfo(client internalapi.RuntimeService, podIndex map[string]int6
 		pod := &podInfoSet[podIndex[podName]]
 
 		// get containers stats
-		getContainerStatsInfo(client, podStats, pod, podName)
+		var isRunning bool
+		isRunning = getContainerStatsInfo(client, podStats, pod, podName, checkpointContainerList, removeContainerList, resultChan)
+		if !isRunning {
+			currentRunningPods = currentRunningPods[:len(currentRunningPods)-1]
+		}
 	}
 
 	if !isPodRunning {
 		fmt.Println("There is no pod running.")
-		//os.Exit(0)
+
+		PrintResult(systemInfoSet, podInfoSet, podIndex, avgCheckpointTime, avgRepairTime, avgRemoveTime)
+
+		os.Exit(0)
 	}
 
 	return podInfoSet, currentRunningPods
@@ -85,18 +112,65 @@ func InitPodData(podName string, podIndex map[string]int64, podInfoSet []global.
 	podInfo.Uid = podStats.Attributes.Metadata.Uid
 	podInfo.Namespace = podStats.Attributes.Metadata.Namespace
 
+	command := "kubectl get po " + podName + " -o=json | jq '.spec.containers[0].resources.requests.memory'"
+	out, _ := exec.Command("bash", "-c", command).Output()
+	memoryRequestStr := string(out[:])
+	memoryRequestStr = memoryRequestStr[1 : len(memoryRequestStr)-2] // remove double quotation
+	memoryRequestStr = strings.Trim(memoryRequestStr, "Mi")          // Using Trim() function - remove Mi string
+	memoryRequest, _ := strconv.Atoi(memoryRequestStr)               // type conversion - string to int
+	memoryRequestToBytes := memoryRequest * 1048576                  // mibibyte to byte
+	podInfo.RequestMemory = int64(memoryRequestToBytes)
+
 	podIndex[podName] = int64(len(podInfoSet))
 	podInfoSet = append(podInfoSet, podInfo) // append dynamic array
 
 	return podInfoSet
 }
 
-func getContainerStatsInfo(client internalapi.RuntimeService, podStats *pb.PodSandboxStats, pod *global.PodData, podName string) {
+// func checkRestartCount
+
+func getContainerStatsInfo(client internalapi.RuntimeService, podStats *pb.PodSandboxStats, pod *global.PodData,
+	podName string, checkpointContainerList []global.CheckpointContainer, removeContainerList []global.CheckpointContainer,
+	resultChan chan global.CheckpointContainer) bool {
+
+	// Detect if "restart container" is restarted
+	command := "kubectl get po " + podName + " -o=json | jq '.status.containerStatuses[0].state.waiting.reason'"
+
+	out, _ := exec.Command("bash", "-c", command).Output()
+	isCreateContainerError := string(out[:])
+
+	if len(isCreateContainerError) < 2 {
+		return false
+	}
+
+	isCreateContainerError = isCreateContainerError[1 : len(isCreateContainerError)-2]
+	//fmt.Println(isCreateContainerError)
+
+	if isCreateContainerError == "CreateContainerError" {
+		for _, checkpointContainer := range checkpointContainerList {
+			if podName == checkpointContainer.PodName {
+				RemoveRestartedRepairContainer(client, podName)
+				resultChan <- checkpointContainer
+
+				return false
+			}
+		}
+	}
+
+	if len(podStats.Linux.Containers) == 0 { // Crashbackoff(OOMKilled etc.)
+		return false
+	}
 
 	for _, containerStats := range podStats.Linux.Containers {
 		containerName := containerStats.Attributes.Metadata.Name
 
 		var containerResource global.ContainerResourceData
+
+		_, err := client.ContainerStatus(context.TODO(), containerStats.Attributes.Id, false)
+		if err != nil { // exception handling
+			fmt.Println(err)
+			return false
+		}
 
 		// init container data
 		if _, exists := pod.ContainerIndex[containerName]; !exists {
@@ -108,26 +182,43 @@ func getContainerStatsInfo(client internalapi.RuntimeService, podStats *pb.PodSa
 		}
 		container := &pod.Container[pod.ContainerIndex[containerName]]
 
+		// Detect if a container is restarted
+		if container.Attempt < containerStats.Attributes.Metadata.Attempt {
+			container.Attempt = containerStats.Attributes.Metadata.Attempt
+			for _, checkpointContainer := range checkpointContainerList {
+				if podName == checkpointContainer.PodName && checkpointContainer.IsCheckpoint {
+					RemoveContainer(client, podName)
+					checkpointContainer.CheckpointData.RemoveStartTime = time.Now().Unix()
+					checkpointContainer.ContainerData.NumOfRemove++
+					removeContainerList = append(removeContainerList, checkpointContainer)
+
+					return false
+				}
+			}
+		}
+
+		// If the container-id changed due to a restart (No checkpointData)
+		if container.Id != containerStats.Attributes.Id {
+			container = FixRestartContainerData(client, container, containerName, containerStats, pod, podName)
+
+			// 가장 뒤에 습득한 데이터부터...
+			container.Resource = container.Resource[len(container.Resource)-1:]
+			container.TimeWindow = 1
+			// 다른 자료구조에도 바뀌었음을 전달해야 함
+			//다른곳에도 전달이 필요할 것이고, 컨테이너 사이즈 이런거 리셋됬을 것인데 어떻게 할 것인데?
+		}
+
 		// update restore container data
 		if pod.IsRepairPod {
 			if container.Id != containerStats.Attributes.Id {
-				fmt.Println("Trigger!")
 				container = UpdateRepairnitContainerData(client, container, containerName, containerStats, pod)
 			}
 		}
 
-		/*
-			// 컨테이너 아이디 변경되었는가?? (재시작으로 인해... 발생한 경우)
-			if container.Id != containerStats.Attributes.Id {
-				fmt.Println("Trigger!")
-				container.Id = containerStats.Attributes.Id
-				// 다른 자료구조에도 바뀌었음을 전달해야 함
-				//다른곳에도 전달이 필요할 것이고, 컨테이너 사이즈 이런거 리셋됬을 것인데 어떻게 할 것인데?
-			}*/
-
 		if containerStats.Cpu == nil || containerStats.Memory == nil { // exception handling: nil pointer
 			continue
 		}
+
 		containerResource.CpuUsageCoreNanoSeconds = containerStats.Cpu.UsageCoreNanoSeconds.Value
 		// do not support CpuUsageNanoCores in cri-o runtime
 		//podInfo.Container[i].Resource.CpuUsageNanoCores = containerStats.Cpu.UsageNanoCores.Value
@@ -149,6 +240,7 @@ func getContainerStatsInfo(client internalapi.RuntimeService, podStats *pb.PodSa
 			container.Resource = container.Resource[1:]
 		}
 	}
+	return true
 }
 
 func InitContainerData(client internalapi.RuntimeService, pod *global.PodData, containerName string, containerStats *pb.ContainerStats, podName string) []global.ContainerData {
@@ -204,12 +296,54 @@ func InitContainerData(client internalapi.RuntimeService, pod *global.PodData, c
 	return pod.Container
 }
 
+func FixRestartContainerData(client internalapi.RuntimeService, container *global.ContainerData, containerName string,
+	containerStats *pb.ContainerStats, pod *global.PodData, podName string) *global.ContainerData {
+
+	container.Id = containerStats.Attributes.Id
+	container.Name = containerStats.Attributes.Metadata.Name
+	container.Attempt = containerStats.Attributes.Metadata.Attempt
+
+	containerStatus, err := client.ContainerStatus(context.TODO(), container.Id, false)
+	if err != nil { // exception handling
+		fmt.Println(err)
+		return nil
+	}
+
+	containerRes := containerStatus.Status.Resources
+
+	// Adjust request and limit values for operation (request == limit)
+	command := "kubectl get po " + podName + " -o=json | jq '.spec.containers[0].resources.requests.memory'"
+	out, _ := exec.Command("bash", "-c", command).Output()
+	memoryRequestStr := string(out[:])
+	memoryRequestStr = memoryRequestStr[1 : len(memoryRequestStr)-2] // remove double quotation
+	memoryRequestStr = strings.Trim(memoryRequestStr, "Mi")          // Using Trim() function - remove Mi string
+	memoryRequest, _ := strconv.Atoi(memoryRequestStr)               // type conversion - string to int
+	memoryRequestToBytes := memoryRequest * 1048576                  // mibibyte to byte
+	containerRes.Linux.MemoryLimitInBytes = int64(memoryRequestToBytes)
+	UpdateContainerResources(client, container.Id, containerRes)
+
+	// get containerCgroupResources
+	container.Cgroup.CpuPeriod = containerRes.Linux.CpuPeriod
+	container.Cgroup.CpuQuota = containerRes.Linux.CpuQuota
+	container.Cgroup.CpuShares = containerRes.Linux.CpuShares
+	container.Cgroup.MemoryLimitInBytes = containerRes.Linux.MemoryLimitInBytes
+	//container.Cgroup.OomScoreAdj = containerRes.Linux.OomScoreAdj
+	//container.Cgroup.CpusetCpus = containerRes.Linux.CpusetCpus
+	//container.Cgroup.CpusetMems = containerRes.Linux.CpusetMems
+
+	//append originalContainerData
+	container.OriginalContainerData = containerRes
+
+	return container
+}
+
 func UpdateRepairnitContainerData(client internalapi.RuntimeService, container *global.ContainerData, containerName string, containerStats *pb.ContainerStats, pod *global.PodData) *global.ContainerData {
 
 	container.Id = containerStats.Attributes.Id
 	container.Name = containerStats.Attributes.Metadata.Name
 	container.Resource = make([]global.ContainerResourceData, 0)
 	container.Cgroup.MemoryLimitInBytes = int64(float64(container.Cgroup.MemoryLimitInBytes) * 1.1)
+	container.Attempt = containerStats.Attributes.Metadata.Attempt
 	//container.Priority
 	//NumOfScale int64
 	//TimeAfterScaleup int64
@@ -217,9 +351,9 @@ func UpdateRepairnitContainerData(client internalapi.RuntimeService, container *
 
 	container.TimeWindow = 0
 	container.NumOfRemove = pod.RepairData.ContainerData.NumOfRemove
-	container.DownTime += pod.RepairData.CheckpointData.RemoveEndTime - pod.RepairData.CheckpointData.RemoveEndTime
+	container.DownTime += pod.RepairData.CheckpointData.RemoveEndTime - pod.RepairData.CheckpointData.RemoveStartTime
 	// reset repair data
-	pod.RepairData = global.PauseContainer{}
+	pod.RepairData = global.CheckpointContainer{}
 
 	containerStatus, err := client.ContainerStatus(context.TODO(), container.Id, false)
 	if err != nil { // exception handling
@@ -249,7 +383,7 @@ func UpdateRepairnitContainerData(client internalapi.RuntimeService, container *
 	return container
 }
 
-func UpdatePodData(client internalapi.RuntimeService, repairContainerCandidate global.PauseContainer, podIndex map[string]int64, podInfoSet []global.PodData) []global.PodData {
+func UpdatePodData(client internalapi.RuntimeService, repairContainerCandidate global.CheckpointContainer, podIndex map[string]int64, podInfoSet []global.PodData, repairRequestMemory int64) []global.PodData {
 
 	podName := repairContainerCandidate.PodName
 	var podId string
@@ -259,6 +393,11 @@ func UpdatePodData(client internalapi.RuntimeService, repairContainerCandidate g
 		command := "kubectl get po " + podName + " -o json | jq '.metadata.annotations.\"cni.projectcalico.org/containerID\"'"
 		out, _ := exec.Command("bash", "-c", command).Output()
 		strout := string(out[:])
+
+		if len(strout) == 0 {
+			time.Sleep(time.Second)
+			continue
+		}
 
 		if strout[1:len(strout)-2] != "ul" {
 			podId = strout
@@ -279,6 +418,7 @@ func UpdatePodData(client internalapi.RuntimeService, repairContainerCandidate g
 			podInfoSet[podIndex[podName]].Uid = podStats.Attributes.Metadata.Uid
 			podInfoSet[podIndex[podName]].Namespace = podStats.Attributes.Metadata.Namespace
 			podInfoSet[podIndex[podName]].IsRepairPod = true
+			podInfoSet[podIndex[podName]].RepairRequestMemory = repairRequestMemory
 			podInfoSet[podIndex[podName]].RepairData = repairContainerCandidate
 
 			break
@@ -304,9 +444,9 @@ func UpdateContainerData(client internalapi.RuntimeService, containerData *globa
 		return
 	}
 	// 이 시간도 굳이 갱신을 해야 하나??
-	containerData.CreatedAt = containerStatus.Status.CreatedAt
-	containerData.StartedAt = containerStatus.Status.StartedAt
-	containerData.FinishedAt = containerStatus.Status.FinishedAt
+	//containerData.CreatedAt = containerStatus.Status.CreatedAt
+	//containerData.StartedAt = containerStatus.Status.StartedAt
+	//containerData.FinishedAt = containerStatus.Status.FinishedAt
 
 	containerRes := containerStatus.Status.Resources
 
@@ -391,4 +531,160 @@ func GetSystemStatsInfo(systemInfoSet []global.SystemInfo) []global.SystemInfo {
 	systemInfoSet = append(systemInfoSet, getSystemInfo)
 
 	return systemInfoSet
+}
+
+func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData, podIndex map[string]int64,
+	avgCheckpointTime []global.CheckpointTime, avgRepairTime []global.RepairTime, avgRemoveTime []global.RemoveTime) {
+	// 성능측정지표를 여기에서 print하도록
+	var pods *v1.PodList
+	var err error
+
+	var resultPod []ResultPodData
+
+	var restartLog []int32
+	var restartSum int32
+
+	var sumAvgCheckpointTime int64
+	var sumAvgRepairTime int64
+
+	var runningTimeArr []int64
+	var waitTimeArr []int64
+	var checkpointTimeArr []int64
+	var repairTimeArr []int64
+
+	var startedTestTime int64 = 9999999999999
+	var finishedTestTime int64 = 0
+
+	var minContainerRunningTime int64 = 9999999999999
+	var maxContainerRunningTime int64 = 0
+	var totalContinerRunningTime int64 = 0
+
+	var minContainerWaitTime int64 = 9999999999999
+	var maxContainerWaitTime int64 = 0
+	var totalContainerWaitTime int64 = 0
+
+	clientset := InitClient()
+	if clientset == nil {
+		fmt.Println("Could not create client!")
+		os.Exit(-1)
+	}
+
+	for {
+		pods, err = clientset.CoreV1().Pods("default").List(context.TODO(), metav1.ListOptions{})
+		if err != nil {
+			panic(err)
+		}
+
+		if IsSucceed(pods.Items) == false {
+			time.Sleep(time.Second)
+		} else {
+			break
+		}
+	}
+
+	for _, pod := range pods.Items {
+		var newPod ResultPodData
+
+		newPod.PodName = pod.Name
+
+		newPod.StartTime = pod.Status.StartTime.Unix()
+		newPod.StartedAt = pod.Status.ContainerStatuses[0].State.Terminated.StartedAt.Unix()
+		newPod.FinishedAt = pod.Status.ContainerStatuses[0].State.Terminated.FinishedAt.Unix()
+
+		collectPodInfo := &podInfoSet[podIndex[newPod.PodName]]
+
+		for _, podRemoveTime := range avgRemoveTime {
+			if podRemoveTime.PodName == newPod.PodName {
+				newPod.RemoveTime += podRemoveTime.RemoveTime
+			}
+		}
+
+		newPod.RunningTime = newPod.FinishedAt - collectPodInfo.Container[0].StartedAt/global.NANOSECONDS - newPod.RemoveTime
+		//중단된 컨테이너 따로 계산해야 함... 얘가 어려움
+		// Finish는 맞추고 Start를 다르게 계산해야 하며.... start가 컨테이너가 실행된 시점인지? 확인이 필요(얘만 수정하면되지않을까)
+
+		if collectPodInfo.Container[0].NumOfRemove != 0 {
+			newPod.RestartCount = int32(collectPodInfo.Container[0].PastAttempt) + int32(collectPodInfo.Container[0].NumOfRemove)
+		} else {
+			newPod.RestartCount = int32(collectPodInfo.Container[0].Attempt)
+		}
+
+		if startedTestTime > newPod.StartTime {
+			startedTestTime = newPod.StartTime
+		}
+		if finishedTestTime < newPod.FinishedAt {
+			finishedTestTime = newPod.FinishedAt
+		}
+
+		if minContainerRunningTime > newPod.RunningTime {
+			minContainerRunningTime = newPod.RunningTime
+		}
+		if maxContainerRunningTime < newPod.RunningTime {
+			maxContainerRunningTime = newPod.RunningTime
+		}
+
+		totalContinerRunningTime += newPod.RunningTime
+		restartSum += newPod.RestartCount
+		restartLog = append(restartLog, newPod.RestartCount)
+		runningTimeArr = append(runningTimeArr, newPod.RunningTime)
+
+		resultPod = append(resultPod, newPod)
+	}
+
+	for i, pod := range resultPod {
+		var bias int64
+		var err error
+		bias, err = strconv.ParseInt(pod.PodName[len(pod.PodName)-2:], 10, 64)
+		if err != nil {
+			bias, _ = strconv.ParseInt(pod.PodName[len(pod.PodName)-1:], 10, 64)
+		}
+		pod.WaitTime = pod.StartTime - startedTestTime - bias + pod.RemoveTime // 말고도 중간에 퇴출되어있던 시간도 측정해야 함
+		resultPod[i].WaitTime = pod.WaitTime
+
+		if minContainerWaitTime > pod.WaitTime {
+			minContainerWaitTime = pod.WaitTime
+		}
+		if maxContainerWaitTime < pod.WaitTime {
+			maxContainerWaitTime = pod.WaitTime
+		}
+		totalContainerWaitTime += pod.WaitTime
+		waitTimeArr = append(waitTimeArr, pod.WaitTime)
+	}
+
+	for _, time := range avgCheckpointTime {
+		sumAvgCheckpointTime += time.CheckpointTime
+		checkpointTimeArr = append(checkpointTimeArr, time.CheckpointTime)
+	}
+
+	for _, time := range avgRepairTime {
+		sumAvgRepairTime += time.RepairTime
+		repairTimeArr = append(repairTimeArr, time.RepairTime)
+	}
+
+	fmt.Println("TotalRunningTime: ", finishedTestTime-startedTestTime)
+	for _, pods := range podInfoSet {
+		fmt.Print(pods.Name, " ")
+	}
+	fmt.Println("RestartLog: ", restartLog)
+	fmt.Println("TotalContainerRestart: ", restartSum)
+	fmt.Println("AvgRestartCount: ", float64(restartSum)/float64(len(restartLog)))
+
+	fmt.Println("averageContainerRunningTime:", float64(totalContinerRunningTime)/float64(len(pods.Items)))
+	fmt.Println("containerRunningTimeArray:", runningTimeArr)
+	fmt.Println("averageContainerWaitTime:", float64(totalContainerWaitTime)/float64(len(pods.Items)))
+	fmt.Println("containerWaitTimeArray:", waitTimeArr)
+
+	fmt.Println("AverageCheckpointTime: ", float64(sumAvgCheckpointTime)/float64(len(avgCheckpointTime)))
+	fmt.Println(checkpointTimeArr)
+	fmt.Println("AverageRepairTime: ", float64(sumAvgRepairTime)/float64(len(avgRepairTime)))
+	fmt.Println(repairTimeArr)
+}
+
+func IsSucceed(podsItems []v1.Pod) bool {
+	for _, pod := range podsItems {
+		if pod.Status.Phase != "Succeeded" {
+			return false
+		}
+	}
+	return true
 }

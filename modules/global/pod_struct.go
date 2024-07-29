@@ -22,7 +22,10 @@ type PodData struct {
 	Container      []ContainerData
 
 	IsRepairPod bool
-	RepairData  PauseContainer
+	RepairData  CheckpointContainer
+
+	RequestMemory       int64
+	RepairRequestMemory int64
 }
 
 type ContainerData struct {
@@ -32,6 +35,8 @@ type ContainerData struct {
 	Name string
 	// Attempt number of creating the container. Default: 0.
 	Attempt uint32
+
+	PastAttempt uint32
 
 	CreatedAt int64
 

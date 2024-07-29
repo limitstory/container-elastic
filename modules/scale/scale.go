@@ -21,8 +21,17 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 
 	scaleUpCandidateList, sumLimitMemorySize = AppendToScaleUpCandidateList(scaleUpCandidateList, podIndex, podInfoSet, currentRunningPods)
 	// calculate require memory
-	for i, scaleCandidate := range scaleUpCandidateList {
-		scaleUpCandidateList[i].ScaleSize = CalculateScaleSize(scaleCandidate.ContainerData)
+
+	for i := 0; i < len(scaleUpCandidateList); i++ {
+		currentMemory := scaleUpCandidateList[i].ContainerData.OriginalContainerData.Linux.MemoryLimitInBytes
+		scaleUpCandidateList[i].ScaleSize = CalculateScaleSize(scaleUpCandidateList[i].ContainerData)
+		if currentMemory == global.MAX_SIZE_PER_CONTAINER {
+			scaleUpCandidateList[i].ScaleSize = 0
+		} else if currentMemory+scaleUpCandidateList[i].ScaleSize > global.MAX_SIZE_PER_CONTAINER {
+			scaleUpCandidateList[i].ScaleSize = global.MAX_SIZE_PER_CONTAINER - currentMemory
+		} else if scaleUpCandidateList[i].ScaleSize < global.MIN_SCALE_SIZE {
+			scaleUpCandidateList[i].ScaleSize = global.MIN_SCALE_SIZE
+		}
 		scaleUpMemorySize += scaleUpCandidateList[i].ScaleSize
 	}
 
@@ -31,15 +40,21 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 	if float64(sumLimitMemorySize)+float64(scaleUpMemorySize) < float64(memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD {
 		// Scale up all containers
 		for _, scaleCandidate := range scaleUpCandidateList {
+			if scaleCandidate.ScaleSize == 0 {
+				continue
+			}
+			if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+				ContinueContainer(client, scaleCandidate.ContainerData)
+			}
 			ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
 			// update container info
 			mod.UpdateContainerData(client, scaleCandidate.ContainerData)
 			// increase the number of scale
 			scaleCandidate.ContainerData.NumOfScale++
 			// reset TimeWindow
-			scaleCandidate.ContainerData.TimeWindow = 0
+			scaleCandidate.ContainerData.TimeWindow = 1
 			// reset container resource slice
-			scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[:1]
+			scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
 		}
 		// Reset scaleUpCandidateList
 		scaleUpCandidateList = scaleUpCandidateList[:0]
@@ -90,11 +105,17 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 		for i, scaleCandidate := range targetScaleUpList {
 			if lastScaleUpSize != 0 && i == len(targetScaleUpList)-1 {
 				scaleCandidate.ScaleSize = lastScaleUpSize
-				fmt.Println("Size: ", lastScaleUpSize)
+				//fmt.Println("Size: ", lastScaleUpSize)
+				if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+					ContinueContainer(client, scaleCandidate.ContainerData)
+				}
 				ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
 				// update container info
 				mod.UpdateContainerData(client, scaleCandidate.ContainerData)
 			} else {
+				if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+					ContinueContainer(client, scaleCandidate.ContainerData)
+				}
 				ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
 				// update container info
 				mod.UpdateContainerData(client, scaleCandidate.ContainerData)
@@ -102,9 +123,9 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 			// increase the number of scale
 			scaleCandidate.ContainerData.NumOfScale++
 			// reset TimeWindow
-			scaleCandidate.ContainerData.TimeWindow = 0
+			scaleCandidate.ContainerData.TimeWindow = 1
 			// reset container resource slice
-			scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[:1]
+			scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
 		}
 		// Change scaleUpCandidateList (append index i to end)
 		if noScaleUpIndex < len(sortedScaleUpCandidateList) { // If all containers are not scaled up
@@ -126,6 +147,8 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 			}
 		}
 	}
+
+	var toRemovePauseContainer []int
 	// logic to continue execute scaleup container
 	for i := 0; i < len(pauseContainerList); i++ {
 		isRequireContinue := true
@@ -139,8 +162,17 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 			ContinueContainer(client, pauseContainerList[i].ContainerData)
 			// update container info
 			mod.UpdateContainerData(client, pauseContainerList[i].ContainerData)
-			pauseContainerList = append(pauseContainerList[:i], pauseContainerList[i+1:]...)
-			i--
+			toRemovePauseContainer = append(toRemovePauseContainer, i)
+		}
+	}
+
+	for i := len(toRemovePauseContainer) - 1; i >= 0; i-- {
+		idx := toRemovePauseContainer[i]
+		if idx < len(pauseContainerList) {
+			pauseContainerList = append(pauseContainerList[:idx], pauseContainerList[idx+1:]...)
+		} else {
+			// idx가 슬라이스 범위를 벗어나는 경우, 마지막 요소를 제거
+			pauseContainerList = pauseContainerList[:idx]
 		}
 	}
 
@@ -158,14 +190,17 @@ func DecisionScaleDown(client internalapi.RuntimeService, podIndex map[string]in
 			continue
 		}
 		scaleCandidate.ScaleSize = int64(float64(res[len(res)-1].MemoryUsageBytes) / float64(global.CONTAINER_MEMORY_SLO))
+		if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+			ContinueContainer(client, scaleCandidate.ContainerData)
+		}
 		ScaleDown(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
 		// reset TimeWindow
-		scaleCandidate.ContainerData.TimeWindow = 0
+		scaleCandidate.ContainerData.TimeWindow = 1
 		// update container info
 		mod.UpdateContainerData(client, scaleCandidate.ContainerData)
 
 		// reset container resource slice
-		scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[:1]
+		scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
 	}
 
 	return podInfoSet
@@ -228,14 +263,22 @@ func AppendToScaleDownCandidateList(client internalapi.RuntimeService, scaleDown
 				if container.Cgroup.MemoryLimitInBytes <= global.MIN_SIZE_PER_CONTAINER {
 					continue
 				}
-				if container.Cgroup.MemoryLimitInBytes > global.MIN_SIZE_PER_CONTAINER && conMemUtil < global.CONTAINER_MEMORY_SLO_LOWER {
-					ScaleDown(client, &container, global.MIN_SIZE_PER_CONTAINER)
+				// 복구 파드의 경우 메모리 할당량이 올라오기 전까지 scaleDown되지 않음
+				if pod.IsRepairPod && container.Cgroup.MemoryLimitInBytes <= pod.RepairRequestMemory { // 우선 생성 시간은 신경쓰지 말자.
+					continue
+				}
+				if container.Cgroup.MemoryLimitInBytes > pod.RequestMemory &&
+					float64(container.Cgroup.MemoryLimitInBytes) < float64(pod.RequestMemory)*global.CONTAINER_MEMORY_SLO_LOWER {
+					ScaleDown(client, &container, pod.RequestMemory)
 					// update container info
-					mod.UpdateContainerData(client, &container)
+					mod.UpdateContainerData(client, &pod.Container[i])
+
 					// reset TimeWindow
-					pod.Container[i].TimeWindow = 0
+					pod.Container[i].TimeWindow = 1
 					// reset container resource slice
 					pod.Container[i].Resource = container.Resource[:1]
+
+					continue
 				}
 			}
 
@@ -250,6 +293,7 @@ func AppendToScaleDownCandidateList(client internalapi.RuntimeService, scaleDown
 				scaleDownCandiate.ContainerData = &pod.Container[i]
 
 				scaleDownCandidateList = append(scaleDownCandidateList, scaleDownCandiate)
+
 			}
 		}
 	}
@@ -263,32 +307,33 @@ func CalculateScaleSize(scaleCandidate *global.ContainerData) int64 {
 
 	reslen := len(scaleCandidate.Resource)
 	if reslen <= 2 {
-		return int64(scaleCandidate.Resource[0].MemoryUsageBytes)
+		return int64(float64(scaleCandidate.Resource[0].MemoryUsageBytes) * 0.3)
 	}
 
 	for i := 0; i <= (reslen-1)/10; i++ {
 		if i == (reslen-1)/10 {
-			size := float64(scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes - scaleCandidate.Resource[0].MemoryUsageBytes)
-			if float64(scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes) < float64(scaleCandidate.Resource[0].MemoryUsageBytes) {
-				scaleSize = 0
+			size := scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes - scaleCandidate.Resource[0].MemoryUsageBytes
+			if scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes < scaleCandidate.Resource[0].MemoryUsageBytes {
+				break
 			} else {
-				scaleSize += size * (float64(global.MAX_TIME_WINDOW) / float64(20*(i+1))) // 수식 조정이 필요할 수도 잇음
+				scaleSize += float64(size) * (float64(global.MAX_TIME_WINDOW) / float64(global.SACLE_WEIGHT*(i+1))) // 수식 조정이 필요할 수도 잇음
 			}
-			//fmt.Println(i, "Size: ", scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes-scaleCandidate.Resource[0].MemoryUsageBytes)
+			//fmt.Println(reslen-(i*10+1), " ~ 0", "Size: ", scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes-scaleCandidate.Resource[0].MemoryUsageBytes)
 			//fmt.Println(i, "Size-first: ", float64(scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes))
 			//fmt.Println(i, "Size-last: ", float64(scaleCandidate.Resource[0].MemoryUsageBytes))
 		} else {
-			size := float64(scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes - scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes)
-			// 음수일 경우 확장 사이즈를 0으로 초기화 한다.
-			if float64(scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes) < float64(scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes) {
-				scaleSize = 0
+			size := scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes - scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes
+			// 음수일 경우 loop를 벗어난다.
+			if scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes < scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes {
+				break
 			} else {
-				scaleSize += size * (float64(global.MAX_TIME_WINDOW) / float64(20*(i+1)))
+				scaleSize += float64(size) * (float64(global.MAX_TIME_WINDOW) / float64(global.SACLE_WEIGHT*(i+1)))
 			}
-			//fmt.Println(i, "Size: ", float64(scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes-scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes))
-			//fmt.Println(i, "Size-first: ", float64(scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes))
-			//fmt.Println(i, "Size-last: ", float64(scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes))
+			//fmt.Println(reslen-(i*10+1), " ~ ", reslen-((i+1)*10), " ", "Size: ", scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes-scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes)
+			//fmt.Println(i, "Size-first: ", scaleCandidate.Resource[reslen-(i*10+1)].MemoryUsageBytes)
+			//fmt.Println(i, "Size-last: ", scaleCandidate.Resource[reslen-((i+1)*10)].MemoryUsageBytes)
 		}
+		//fmt.Println("ScaleSize ", i, ": ", scaleSize)
 	}
 
 	return int64(scaleSize)
@@ -305,10 +350,12 @@ func CheckToAppendScaleCandidateList(podName string, container global.ContainerD
 
 func ScaleUp(client internalapi.RuntimeService, scaleUpCandidate *global.ContainerData, scaleUpSize int64) {
 	scaleUpCandidate.OriginalContainerData.Linux.MemoryLimitInBytes += scaleUpSize
+	fmt.Println("ScaleUp")
 	mod.UpdateContainerResources(client, scaleUpCandidate.Id, scaleUpCandidate.OriginalContainerData)
 }
 
 func ScaleDown(client internalapi.RuntimeService, scaleDownCandidate *global.ContainerData, scaleDownSize int64) {
 	scaleDownCandidate.OriginalContainerData.Linux.MemoryLimitInBytes = scaleDownSize
+	fmt.Println("ScaleDown")
 	mod.UpdateContainerResources(client, scaleDownCandidate.Id, scaleDownCandidate.OriginalContainerData)
 }
