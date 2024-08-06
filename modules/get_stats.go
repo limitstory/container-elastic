@@ -190,7 +190,7 @@ func getContainerStatsInfo(client internalapi.RuntimeService, podStats *pb.PodSa
 					RemoveContainer(client, podName)
 					checkpointContainer.CheckpointData.RemoveStartTime = time.Now().Unix()
 					checkpointContainer.ContainerData.NumOfRemove++
-					removeContainerList = append(removeContainerList, checkpointContainer)
+					resultChan <- checkpointContainer
 
 					return false
 				}
@@ -587,11 +587,11 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 
 		newPod.PodName = pod.Name
 
-		newPod.StartTime = pod.Status.StartTime.Unix()
-		newPod.StartedAt = pod.Status.ContainerStatuses[0].State.Terminated.StartedAt.Unix()
-		newPod.FinishedAt = pod.Status.ContainerStatuses[0].State.Terminated.FinishedAt.Unix()
-
 		collectPodInfo := &podInfoSet[podIndex[newPod.PodName]]
+
+		newPod.StartTime = pod.Status.StartTime.Unix() // 이거... 데이터 수정해야 할듯.... startTime하고 startedAt은 수정필요
+		newPod.StartedAt = collectPodInfo.Container[0].StartedAt / global.NANOSECONDS
+		newPod.FinishedAt = pod.Status.ContainerStatuses[0].State.Terminated.FinishedAt.Unix()
 
 		for _, podRemoveTime := range avgRemoveTime {
 			if podRemoveTime.PodName == newPod.PodName {
@@ -599,7 +599,7 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 			}
 		}
 
-		newPod.RunningTime = newPod.FinishedAt - collectPodInfo.Container[0].StartedAt/global.NANOSECONDS - newPod.RemoveTime
+		newPod.RunningTime = newPod.FinishedAt - newPod.StartedAt - newPod.RemoveTime
 		//중단된 컨테이너 따로 계산해야 함... 얘가 어려움
 		// Finish는 맞추고 Start를 다르게 계산해야 하며.... start가 컨테이너가 실행된 시점인지? 확인이 필요(얘만 수정하면되지않을까)
 
@@ -634,11 +634,14 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 	for i, pod := range resultPod {
 		var bias int64
 		var err error
-		bias, err = strconv.ParseInt(pod.PodName[len(pod.PodName)-2:], 10, 64)
+		bias, err = strconv.ParseInt(pod.PodName[len(pod.PodName)-3:], 10, 64)
 		if err != nil {
-			bias, _ = strconv.ParseInt(pod.PodName[len(pod.PodName)-1:], 10, 64)
+			bias, err = strconv.ParseInt(pod.PodName[len(pod.PodName)-2:], 10, 64)
+			if err != nil {
+				bias, _ = strconv.ParseInt(pod.PodName[len(pod.PodName)-1:], 10, 64)
+			}
 		}
-		pod.WaitTime = pod.StartTime - startedTestTime - bias + pod.RemoveTime // 말고도 중간에 퇴출되어있던 시간도 측정해야 함
+		pod.WaitTime = pod.StartedAt - startedTestTime - (bias / global.NUM_OF_WORKERS) + pod.RemoveTime // 말고도 중간에 퇴출되어있던 시간도 측정해야 함
 		resultPod[i].WaitTime = pod.WaitTime
 
 		if minContainerWaitTime > pod.WaitTime {
@@ -662,9 +665,6 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 	}
 
 	fmt.Println("TotalRunningTime: ", finishedTestTime-startedTestTime)
-	for _, pods := range podInfoSet {
-		fmt.Print(pods.Name, " ")
-	}
 	fmt.Println("RestartLog: ", restartLog)
 	fmt.Println("TotalContainerRestart: ", restartSum)
 	fmt.Println("AvgRestartCount: ", float64(restartSum)/float64(len(restartLog)))

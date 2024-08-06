@@ -166,18 +166,38 @@ func DecisionRemoveContainer(
 
 func RemoveContainer(client internalapi.RuntimeService, podName string) {
 
-	command := "sudo crictl ps | grep " + podName + " | awk '{print $1}' | xargs sudo crictl stop && kubectl delete pods " + podName + " --grace-period=0 --force"
+	command1 := `container_id=$(sudo crictl ps | grep "` + podName + `" | awk '{print $1}') &&
+	[ -n "$container_id" ] &&
+	pid=$(sudo crictl inspect "$container_id" | grep '"pid":' | awk -F': ' '{print $2}' | sed 's/[^0-9]//g') &&
+	[ -n "$pid" ] &&
+	sudo kill -9 "$pid" &&
+	kubectl delete pods ` + podName + ` --grace-period=0 --force`
+	//command2 := "container_id=$(sudo crictl ps | grep " + podName + " | awk '{print $1}') && [ -n \"$container_id\" ] && echo $container_id | xargs sudo crictl stop && echo $container_id | xargs sudo crictl rm && kubectl delete pods " + podName + " --grace-period=0 --force"
 
-	for {
-		output, err := exec.Command("bash", "-c", command).Output()
+	output, err := exec.Command("bash", "-c", command1).Output()
+	fmt.Println(err)
+	fmt.Println((string(output)))
+	/*
+		for {
+			var output []byte
+			var err error
 
-		if err != nil {
-			fmt.Println(err)
-		} else {
-			fmt.Println((string(output)))
-			break
+			if noErr {
+				output, err := exec.Command("bash", "-c", command1).Output()
+			} else {
+				output, err = exec.Command("bash", "-c", command1).Output()
+			}
+
+			if err != nil {
+				fmt.Println(err)
+				fmt.Println((string(output)))
+				noErr = false
+			} else {
+				fmt.Println((string(output)))
+				break
+			}
 		}
-	}
+	*/
 }
 
 func RemoveRestartedRepairContainer(client internalapi.RuntimeService, podName string) {

@@ -68,21 +68,23 @@ func main() {
 		podInfoSet, currentRunningPods = mod.MonitoringPodResources(client, podIndex, podInfoSet, currentRunningPods, systemInfoSet,
 			checkpointContainerList, removeContainerList, avgCheckpointTime, avgRepairTime, avgRemoveTime, removeContainerToChan)
 
-		for i := 0; i < len(currentRunningPods); i++ {
-			res := podInfoSet[podIndex[currentRunningPods[i]]].Container[0].Resource
-			// main.go 63라인에서 뻗으므로 예외처리 필요함
-			if len(res) == 0 {
-				continue
-			}
-			fmt.Println(podInfoSet[podIndex[currentRunningPods[i]]].Name)
-			fmt.Println(podInfoSet[podIndex[currentRunningPods[i]]].Container[0].Cgroup.CpuQuota)
-			fmt.Println(res[len(res)-1].ConMemUtil)
-			fmt.Println(res[len(res)-1].MemoryUsageBytes)
-			fmt.Println(podInfoSet[podIndex[currentRunningPods[i]]].Container[0].Cgroup.MemoryLimitInBytes)
+		/*
+			for i := 0; i < len(currentRunningPods); i++ {
+				res := podInfoSet[podIndex[currentRunningPods[i]]].Container[0].Resource
+				// main.go 63라인에서 뻗으므로 예외처리 필요함
+				if len(res) == 0 {
+					continue
+				}
+				fmt.Println(podInfoSet[podIndex[currentRunningPods[i]]].Name)
+				fmt.Println(podInfoSet[podIndex[currentRunningPods[i]]].Container[0].Cgroup.CpuQuota)
+				fmt.Println(res[len(res)-1].ConMemUtil)
+				fmt.Println(res[len(res)-1].MemoryUsageBytes)
+				fmt.Println(podInfoSet[podIndex[currentRunningPods[i]]].Container[0].Cgroup.MemoryLimitInBytes)
 
-			//fmt.Println(res[len(res)-1].CpuUtil)
-			//fmt.Println()
-		}
+				//fmt.Println(res[len(res)-1].CpuUtil)
+				//fmt.Println()
+			}
+		*/
 
 		podInfoSet = mod.GetPriorityMetric(podIndex, podInfoSet, currentRunningPods, systemInfoSet)
 		podInfoSet, priorityMap, sortPriority = mod.CalculatePriority(podIndex, podInfoSet, currentRunningPods)
@@ -121,6 +123,7 @@ func main() {
 							//fmt.Println("Data: ", checkpointContainerList[i])
 
 							if container2.IsCheckpoint {
+								time.Sleep(time.Second / 2)
 								stats, _ := client.PodSandboxStats(context.TODO(), container2.PodId)
 								if stats == nil || len(stats.Linux.Containers) == 0 {
 									container2.IsCheckpoint = false
@@ -151,6 +154,7 @@ func main() {
 		}()
 		go cp.DecisionCheckpoint(appendCheckpointContainerToChan, modifyCheckpointContainerToChan, pauseContainerList, checkpointContainerList, semaphore)
 
+		//go
 		scaleUpCandidateList, pauseContainerList, checkpointContainerList, currentRunningPods = mod.DecisionRemoveContainer(client,
 			scaleUpCandidateList, pauseContainerList, checkpointContainerList, currentRunningPods, len(currentRunningPods), priorityMap, removeContainerList, removeContainerToChan)
 
@@ -161,7 +165,6 @@ func main() {
 				case container1 := <-removeContainerToChan:
 					container1.StartRemoveTime = time.Now().Unix()
 					removeContainerList = append(removeContainerList, container1)
-					fmt.Println("Knock")
 				case container2 := <-repairCandidateToChan:
 					for i, removeContainer := range removeContainerList {
 						if container2.PodName == removeContainer.PodName && (container2.DuringCreateContainer || container2.CreatingContainer) {
@@ -197,10 +200,28 @@ func main() {
 		// After limiting CPU usage, watch the trend of memory usage.
 		//mod.ControlRecursiveContainerResources(client, selectContainerId, selectContainerResource)
 
-		fmt.Println("scaleUpCandidateList: ", scaleUpCandidateList)
-		fmt.Println("pauseContainerList: ", pauseContainerList)
-		fmt.Println("checkPointContainerList: ", checkpointContainerList)
-		fmt.Println("removeContainerList: ", removeContainerList)
+		var scaleUpCandidateNameList []string
+		var pauseContainerNameList []string
+		var checkPointContainerNameList []string
+		var removeContainerNameList []string
+
+		for _, scaleUpCandiate := range scaleUpCandidateList {
+			scaleUpCandidateNameList = append(scaleUpCandidateNameList, scaleUpCandiate.PodName)
+		}
+		for _, pauseContainer := range pauseContainerList {
+			pauseContainerNameList = append(pauseContainerNameList, pauseContainer.PodName)
+		}
+		for _, checkPointContainer := range checkpointContainerList {
+			checkPointContainerNameList = append(checkPointContainerNameList, checkPointContainer.PodName)
+		}
+		for _, removeContainer := range removeContainerList {
+			removeContainerNameList = append(removeContainerNameList, removeContainer.PodName)
+		}
+
+		fmt.Println("scaleUpCandidateList: ", scaleUpCandidateNameList)
+		fmt.Println("pauseContainerList: ", pauseContainerNameList)
+		fmt.Println("checkPointContainerList: ", checkPointContainerNameList)
+		fmt.Println("removeContainerList: ", removeContainerNameList)
 		fmt.Println("=====================================================")
 		fmt.Println()
 

@@ -78,10 +78,7 @@ func DecisionCheckpoint(resultChan1 chan global.CheckpointContainer, resultChan2
 				container.IsCheckpoint = true
 				resultChan2 <- container
 			}
-			//}
-			//}
 		}(checkpointContainer)
-		//}
 	}
 	wg.Wait()
 }

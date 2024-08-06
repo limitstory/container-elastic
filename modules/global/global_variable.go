@@ -3,6 +3,8 @@ package modules
 const ENDPOINT string = "unix:///var/run/crio/crio.sock"
 const NODENAME string = "limitstory-virtualbox"
 
+const NUM_OF_WORKERS int64 = 3
+
 const MAX_VALUE int = 10000
 const MIN_VALUE int = -10000
 

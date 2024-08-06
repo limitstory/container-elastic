@@ -19,18 +19,21 @@ func CheckToPauseContainer(container global.ScaleCandidateContainer, pauseContai
 	return true
 }
 
-func AppendPauseContainerList(pauseContainerList []global.PauseContainer, container global.ScaleCandidateContainer) []global.PauseContainer {
-	var pauseContainer global.PauseContainer
+func AppendPauseContainerList(pauseContainerList []global.PauseContainer, containerList []global.ScaleCandidateContainer) []global.PauseContainer {
 
-	pauseContainer.PodName = container.PodName
-	pauseContainer.PodId = container.PodId
-	pauseContainer.ContainerName = container.ContainerName
-	pauseContainer.ContainerId = container.ContainerId
-	pauseContainer.ContainerData = container.ContainerData
-	pauseContainer.Timestamp = time.Now().Unix()
+	for _, container := range containerList {
+		var pauseContainer global.PauseContainer
 
-	pauseContainerList = append(pauseContainerList, pauseContainer)
+		pauseContainer.PodName = container.PodName
+		pauseContainer.PodId = container.PodId
+		pauseContainer.ContainerName = container.ContainerName
+		pauseContainer.ContainerId = container.ContainerId
+		pauseContainer.ContainerData = container.ContainerData
+		pauseContainer.Timestamp = time.Now().Unix()
 
+		pauseContainerList = append(pauseContainerList, pauseContainer)
+
+	}
 	return pauseContainerList
 }
 

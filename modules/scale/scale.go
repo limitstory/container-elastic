@@ -2,6 +2,7 @@ package modules
 
 import (
 	"fmt"
+	"sync"
 
 	internalapi "k8s.io/cri-api/pkg/apis"
 
@@ -12,6 +13,8 @@ import (
 func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int64, podInfoSet []global.PodData, currentRunningPods []string,
 	systemInfoSet []global.SystemInfo, priorityMap map[string]global.PriorityContainer, scaleUpCandidateList []global.ScaleCandidateContainer,
 	pauseContainerList []global.PauseContainer) ([]global.PodData, []global.ScaleCandidateContainer, []global.PauseContainer) {
+
+	var wg sync.WaitGroup
 
 	// Scale Candidate List
 	var scaleUpMemorySize int64
@@ -39,23 +42,30 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 	// 기존에 os에서 점유하는 메모리가 있기 때문에 그걸 offset으로 빼주어야 할 것이다.
 	if float64(sumLimitMemorySize)+float64(scaleUpMemorySize) < float64(memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD {
 		// Scale up all containers
+		wg.Add(len(scaleUpCandidateList))
 		for _, scaleCandidate := range scaleUpCandidateList {
-			if scaleCandidate.ScaleSize == 0 {
-				continue
-			}
-			if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
-				ContinueContainer(client, scaleCandidate.ContainerData)
-			}
-			ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
-			// update container info
-			mod.UpdateContainerData(client, scaleCandidate.ContainerData)
-			// increase the number of scale
-			scaleCandidate.ContainerData.NumOfScale++
-			// reset TimeWindow
-			scaleCandidate.ContainerData.TimeWindow = 1
-			// reset container resource slice
-			scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
+
+			go func(scaleCandidate global.ScaleCandidateContainer) {
+				defer wg.Done()
+
+				if scaleCandidate.ScaleSize == 0 {
+					return
+				}
+				if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+					ContinueContainer(client, scaleCandidate.ContainerData)
+				}
+				ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
+				// update container info
+				mod.UpdateContainerData(client, scaleCandidate.ContainerData)
+				// increase the number of scale
+				scaleCandidate.ContainerData.NumOfScale++
+				// reset TimeWindow
+				scaleCandidate.ContainerData.TimeWindow = 1
+				// reset container resource slice
+				scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
+			}(scaleCandidate)
 		}
+		wg.Wait()
 		// Reset scaleUpCandidateList
 		scaleUpCandidateList = scaleUpCandidateList[:0]
 	} else { // Memory capacity is not sufficient
@@ -102,31 +112,39 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 		}
 
 		// Scale up selected container
+		wg.Add(len(targetScaleUpList))
 		for i, scaleCandidate := range targetScaleUpList {
-			if lastScaleUpSize != 0 && i == len(targetScaleUpList)-1 {
-				scaleCandidate.ScaleSize = lastScaleUpSize
-				//fmt.Println("Size: ", lastScaleUpSize)
-				if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
-					ContinueContainer(client, scaleCandidate.ContainerData)
+
+			go func(scaleCandidate global.ScaleCandidateContainer, i int) {
+				defer wg.Done()
+
+				if lastScaleUpSize != 0 && i == len(targetScaleUpList)-1 {
+					scaleCandidate.ScaleSize = lastScaleUpSize
+					//fmt.Println("Size: ", lastScaleUpSize)
+					if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+						ContinueContainer(client, scaleCandidate.ContainerData)
+					}
+					ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
+					// update container info
+					mod.UpdateContainerData(client, scaleCandidate.ContainerData)
+				} else {
+					if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+						ContinueContainer(client, scaleCandidate.ContainerData)
+					}
+					ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
+					// update container info
+					mod.UpdateContainerData(client, scaleCandidate.ContainerData)
 				}
-				ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
-				// update container info
-				mod.UpdateContainerData(client, scaleCandidate.ContainerData)
-			} else {
-				if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
-					ContinueContainer(client, scaleCandidate.ContainerData)
-				}
-				ScaleUp(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
-				// update container info
-				mod.UpdateContainerData(client, scaleCandidate.ContainerData)
-			}
-			// increase the number of scale
-			scaleCandidate.ContainerData.NumOfScale++
-			// reset TimeWindow
-			scaleCandidate.ContainerData.TimeWindow = 1
-			// reset container resource slice
-			scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
+				// increase the number of scale
+				scaleCandidate.ContainerData.NumOfScale++
+				// reset TimeWindow
+				scaleCandidate.ContainerData.TimeWindow = 1
+				// reset container resource slice
+				scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
+			}(scaleCandidate, i)
 		}
+		wg.Wait()
+
 		// Change scaleUpCandidateList (append index i to end)
 		if noScaleUpIndex < len(sortedScaleUpCandidateList) { // If all containers are not scaled up
 			scaleUpCandidateList = sortedScaleUpCandidateList[noScaleUpIndex:]
@@ -135,17 +153,25 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 		}
 
 		// logic to pause low priority container
+		var pauseCandidateList []global.ScaleCandidateContainer
+		wg.Add(len(scaleUpCandidateList))
 		for _, pauseCandidate := range scaleUpCandidateList {
-			// Check for pauses
-			if CheckToPauseContainer(pauseCandidate, pauseContainerList) { // if not pause yet
-				PauseContainer(client, pauseCandidate.ContainerData)
-				// update container info
-				// 여기 예외처리 해야됨
-				mod.UpdateContainerData(client, pauseCandidate.ContainerData)
-				// append pauseContainerList
-				pauseContainerList = AppendPauseContainerList(pauseContainerList, pauseCandidate)
-			}
+			go func(pauseCandidate global.ScaleCandidateContainer) {
+				defer wg.Done()
+				// Check for pauses
+				if CheckToPauseContainer(pauseCandidate, pauseContainerList) { // if not pause yet
+					PauseContainer(client, pauseCandidate.ContainerData)
+					// update container info
+					// 여기 예외처리 해야됨
+					mod.UpdateContainerData(client, pauseCandidate.ContainerData)
+					// append pauseContainerList
+					pauseCandidateList = append(pauseCandidateList, pauseCandidate)
+				}
+			}(pauseCandidate)
 		}
+		wg.Wait()
+		pauseContainerList = AppendPauseContainerList(pauseContainerList, pauseCandidateList)
+
 	}
 
 	var toRemovePauseContainer []int
@@ -159,12 +185,18 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 			}
 		}
 		if isRequireContinue {
-			ContinueContainer(client, pauseContainerList[i].ContainerData)
-			// update container info
-			mod.UpdateContainerData(client, pauseContainerList[i].ContainerData)
-			toRemovePauseContainer = append(toRemovePauseContainer, i)
+			wg.Add(1)
+			go func(pauseContainerList []global.PauseContainer, i int) {
+				defer wg.Done()
+
+				ContinueContainer(client, pauseContainerList[i].ContainerData)
+				// update container info
+				mod.UpdateContainerData(client, pauseContainerList[i].ContainerData)
+				toRemovePauseContainer = append(toRemovePauseContainer, i)
+			}(pauseContainerList, i)
 		}
 	}
+	wg.Wait()
 
 	for i := len(toRemovePauseContainer) - 1; i >= 0; i-- {
 		idx := toRemovePauseContainer[i]
@@ -180,28 +212,37 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 }
 
 func DecisionScaleDown(client internalapi.RuntimeService, podIndex map[string]int64, podInfoSet []global.PodData, currentRunningPods []string, systemInfoSet []global.SystemInfo) []global.PodData {
+	var wg sync.WaitGroup
+
 	// Scale Candidate List
 	var scaleDownCandidateList []global.ScaleCandidateContainer
 	podInfoSet, scaleDownCandidateList = AppendToScaleDownCandidateList(client, scaleDownCandidateList, podIndex, podInfoSet, currentRunningPods)
 
+	wg.Add(len(scaleDownCandidateList))
 	for _, scaleCandidate := range scaleDownCandidateList {
-		res := scaleCandidate.ContainerData.Resource
-		if len(res) == 0 {
-			continue
-		}
-		scaleCandidate.ScaleSize = int64(float64(res[len(res)-1].MemoryUsageBytes) / float64(global.CONTAINER_MEMORY_SLO))
-		if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
-			ContinueContainer(client, scaleCandidate.ContainerData)
-		}
-		ScaleDown(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
-		// reset TimeWindow
-		scaleCandidate.ContainerData.TimeWindow = 1
-		// update container info
-		mod.UpdateContainerData(client, scaleCandidate.ContainerData)
+		go func(scaleCandidate global.ScaleCandidateContainer) {
+			defer wg.Done()
 
-		// reset container resource slice
-		scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
+			res := scaleCandidate.ContainerData.Resource
+			if len(res) == 0 {
+				return
+			}
+			scaleCandidate.ScaleSize = int64(float64(res[len(res)-1].MemoryUsageBytes) / float64(global.CONTAINER_MEMORY_SLO))
+
+			if scaleCandidate.ContainerData.Cgroup.CpuQuota == global.LIMIT_CPU_QUOTA {
+				ContinueContainer(client, scaleCandidate.ContainerData)
+			}
+			ScaleDown(client, scaleCandidate.ContainerData, scaleCandidate.ScaleSize)
+			// reset TimeWindow
+			scaleCandidate.ContainerData.TimeWindow = 1
+			// update container info
+			mod.UpdateContainerData(client, scaleCandidate.ContainerData)
+
+			// reset container resource slice
+			scaleCandidate.ContainerData.Resource = scaleCandidate.ContainerData.Resource[len(scaleCandidate.ContainerData.Resource)-1:]
+		}(scaleCandidate)
 	}
+	wg.Wait()
 
 	return podInfoSet
 }
