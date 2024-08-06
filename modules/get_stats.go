@@ -584,10 +584,17 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 
 	for _, pod := range pods.Items {
 		var newPod ResultPodData
+		var collectPodInfo *global.PodData
 
 		newPod.PodName = pod.Name
 
-		collectPodInfo := &podInfoSet[podIndex[newPod.PodName]]
+		index, exists := podIndex[newPod.PodName]
+		if !exists {
+			continue
+		} else {
+			// podIndex에 podName이 있을 때의 처리
+			collectPodInfo = &podInfoSet[index]
+		}
 
 		newPod.StartTime = pod.Status.StartTime.Unix() // 이거... 데이터 수정해야 할듯.... startTime하고 startedAt은 수정필요
 		newPod.StartedAt = collectPodInfo.Container[0].StartedAt / global.NANOSECONDS
