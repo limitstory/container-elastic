@@ -40,7 +40,7 @@ func DecisionScaleUp(client internalapi.RuntimeService, podIndex map[string]int6
 
 	// Memory capacity is sufficient
 	// 기존에 os에서 점유하는 메모리가 있기 때문에 그걸 offset으로 빼주어야 할 것이다.
-	if float64(sumLimitMemorySize)+float64(scaleUpMemorySize) < float64(memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD {
+	if float64(memory.Total)+float64(scaleUpMemorySize) < float64(memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD {
 		// Scale up all containers
 		wg.Add(len(scaleUpCandidateList))
 		for _, scaleCandidate := range scaleUpCandidateList {
