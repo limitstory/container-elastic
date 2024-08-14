@@ -308,9 +308,9 @@ func AppendToScaleDownCandidateList(client internalapi.RuntimeService, scaleDown
 				if pod.IsRepairPod && container.Cgroup.MemoryLimitInBytes <= pod.RepairRequestMemory { // 우선 생성 시간은 신경쓰지 말자.
 					continue
 				}
-				if container.Cgroup.MemoryLimitInBytes > pod.RequestMemory &&
+				if container.Cgroup.MemoryLimitInBytes > global.MIN_SIZE_PER_CONTAINER &&
 					float64(container.Cgroup.MemoryLimitInBytes) < float64(pod.RequestMemory)*global.CONTAINER_MEMORY_SLO_LOWER {
-					ScaleDown(client, &container, pod.RequestMemory)
+					ScaleDown(client, &container, global.MIN_SIZE_PER_CONTAINER)
 					// update container info
 					mod.UpdateContainerData(client, &pod.Container[i])
 
