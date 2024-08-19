@@ -123,7 +123,6 @@ func main() {
 							//fmt.Println("Data: ", checkpointContainerList[i])
 
 							if container2.IsCheckpoint {
-								time.Sleep(time.Second / 2)
 								stats, _ := client.PodSandboxStats(context.TODO(), container2.PodId)
 								if stats == nil || len(stats.Linux.Containers) == 0 {
 									container2.IsCheckpoint = false
@@ -152,10 +151,10 @@ func main() {
 				}
 			}
 		}()
-		go cp.DecisionCheckpoint(appendCheckpointContainerToChan, modifyCheckpointContainerToChan, pauseContainerList, checkpointContainerList, semaphore)
+		go cp.DecisionCheckpoint(systemInfoSet, appendCheckpointContainerToChan, modifyCheckpointContainerToChan, pauseContainerList, checkpointContainerList, semaphore)
 
 		//go
-		scaleUpCandidateList, pauseContainerList, checkpointContainerList, currentRunningPods = mod.DecisionRemoveContainer(client,
+		scaleUpCandidateList, pauseContainerList, currentRunningPods = mod.DecisionRemoveContainer(client, systemInfoSet,
 			scaleUpCandidateList, pauseContainerList, checkpointContainerList, currentRunningPods, len(currentRunningPods), priorityMap, removeContainerList, removeContainerToChan)
 
 		// remove container 모두 채널로 통신가능하도록 변경해야 할듯
@@ -163,8 +162,16 @@ func main() {
 			for {
 				select {
 				case container1 := <-removeContainerToChan:
+					var isNotAppend bool
 					container1.StartRemoveTime = time.Now().Unix()
-					removeContainerList = append(removeContainerList, container1)
+					for _, removeContainer := range removeContainerList {
+						if removeContainer.PodName == container1.PodName {
+							isNotAppend = true
+						}
+					}
+					if !isNotAppend {
+						removeContainerList = append(removeContainerList, container1)
+					}
 				case container2 := <-repairCandidateToChan:
 					for i, removeContainer := range removeContainerList {
 						if container2.PodName == removeContainer.PodName && (container2.DuringCreateContainer || container2.CreatingContainer) {

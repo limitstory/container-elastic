@@ -11,9 +11,9 @@ import (
 )
 
 func DecisionRemoveContainer(
-	client internalapi.RuntimeService, scaleUpCandidateList []global.ScaleCandidateContainer, pauseContainerList []global.PauseContainer,
+	client internalapi.RuntimeService, systemInfoSet []global.SystemInfo, scaleUpCandidateList []global.ScaleCandidateContainer, pauseContainerList []global.PauseContainer,
 	checkPointContainerList []global.CheckpointContainer, currentRunningPods []string, lenghOfCurrentRunningPods int, priorityMap map[string]global.PriorityContainer,
-	removeContainerList []global.CheckpointContainer, removeContainerToChan chan global.CheckpointContainer) ([]global.ScaleCandidateContainer, []global.PauseContainer, []global.CheckpointContainer, []string) {
+	removeContainerList []global.CheckpointContainer, removeContainerToChan chan global.CheckpointContainer) ([]global.ScaleCandidateContainer, []global.PauseContainer, []string) {
 
 	var removeCandidateContainerList []global.CheckpointContainer
 	var toRemovePauseContainer []int
@@ -78,6 +78,74 @@ func DecisionRemoveContainer(
 		}
 		removeContainerToChan <- removeCandidateContainer
 	}
+
+	// reset the list
+	removeCandidateContainerList = removeCandidateContainerList[:0]
+	toRemovePauseContainer = toRemovePauseContainer[:0]
+	toRemovescaleUpCandidateList = toRemovescaleUpCandidateList[:0]
+
+	// When the memory usage of the nodes is very high
+	if int64(systemInfoSet[len(systemInfoSet)-1].Memory.Used) > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD) {
+		for i := 0; i < len(checkPointContainerList); i++ {
+			// 메모리 사용량부터 계산해야 함
+			if checkPointContainerList[i].IsCheckpoint && time.Now().Unix() < checkPointContainerList[i].Timestamp+global.RECHECKPOINT_THRESHOLD {
+				removeCandidateContainerList = append(removeCandidateContainerList, checkPointContainerList[i])
+				for j := 0; j < len(pauseContainerList); j++ {
+					if pauseContainerList[j].PodName == checkPointContainerList[i].PodName {
+						toRemovePauseContainer = append(toRemovePauseContainer, j)
+						break
+					}
+				}
+				for k := 0; k < len(scaleUpCandidateList); k++ {
+					if scaleUpCandidateList[k].PodName == checkPointContainerList[i].PodName {
+						toRemovescaleUpCandidateList = append(toRemovescaleUpCandidateList, k)
+						break
+					}
+				}
+			}
+		}
+	}
+
+	for i := len(toRemovePauseContainer) - 1; i >= 0; i-- {
+		idx := toRemovePauseContainer[i]
+		if idx < len(pauseContainerList) {
+			pauseContainerList = append(pauseContainerList[:idx], pauseContainerList[idx+1:]...)
+		} else {
+			// idx가 슬라이스 범위를 벗어나는 경우, 마지막 요소를 제거
+			pauseContainerList = pauseContainerList[:idx]
+		}
+	}
+
+	for i := len(toRemovescaleUpCandidateList) - 1; i >= 0; i-- {
+		idx := toRemovescaleUpCandidateList[i]
+		if idx < len(scaleUpCandidateList) {
+			scaleUpCandidateList = append(scaleUpCandidateList[:idx], scaleUpCandidateList[idx+1:]...)
+		} else {
+			// idx가 슬라이스 범위를 벗어나는 경우, 마지막 요소를 제거
+			scaleUpCandidateList = scaleUpCandidateList[:idx]
+		}
+	}
+
+	// Kill the containers
+	for _, removeCandidateContainer := range removeCandidateContainerList {
+		RemoveContainer(client, removeCandidateContainer.PodName)
+		for i := 0; i < len(currentRunningPods); i++ {
+			if currentRunningPods[i] == removeCandidateContainer.PodName {
+				currentRunningPods = append(currentRunningPods[:i], currentRunningPods[i+1:]...)
+				break
+			}
+		}
+		// move from removeCandidateContainerList to removeContainerList
+		removeCandidateContainer.CheckpointData.RemoveStartTime = time.Now().Unix()
+		removeCandidateContainer.ContainerData.NumOfRemove++
+		if removeCandidateContainer.ContainerData.Attempt > 0 {
+			removeCandidateContainer.ContainerData.PastAttempt = removeCandidateContainer.ContainerData.Attempt
+		}
+		removeContainerToChan <- removeCandidateContainer
+	}
+
+	// reset the list
+	removeCandidateContainerList = removeCandidateContainerList[:0]
 
 	// Deadlock과 유사한 상태에 빠진 경우
 	lenghOfCurrentRunningPods = lenghOfCurrentRunningPods - len(removeCandidateContainerList)
@@ -161,7 +229,7 @@ func DecisionRemoveContainer(
 		removeContainerToChan <- removeCandidateContainer
 	}
 
-	return scaleUpCandidateList, pauseContainerList, checkPointContainerList, currentRunningPods
+	return scaleUpCandidateList, pauseContainerList, currentRunningPods
 }
 
 func RemoveContainer(client internalapi.RuntimeService, podName string) {

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func DecisionCheckpoint(resultChan1 chan global.CheckpointContainer, resultChan2 chan global.CheckpointContainer, pauseContainerList []global.PauseContainer,
+func DecisionCheckpoint(systemInfoSet []global.SystemInfo, resultChan1 chan global.CheckpointContainer, resultChan2 chan global.CheckpointContainer, pauseContainerList []global.PauseContainer,
 	checkpointContainerList []global.CheckpointContainer, semaphore chan struct{}) {
 
 	var wg sync.WaitGroup
@@ -19,7 +19,17 @@ func DecisionCheckpoint(resultChan1 chan global.CheckpointContainer, resultChan2
 	var updateCandidateList []global.CheckpointContainer
 
 	for _, pauseContainer := range pauseContainerList {
-		isAppend := AppendToCheckpointList(pauseContainer, checkpointContainerList)
+		var checkpointCount int64
+		for _, checkpointContainer := range checkpointContainerList {
+			if checkpointContainer.DuringCheckpoint {
+				checkpointCount++
+			}
+		}
+		if checkpointCount >= 3 {
+			break
+		}
+
+		isAppend := AppendToCheckpointList(systemInfoSet, pauseContainer, checkpointContainerList)
 
 		if isAppend {
 			var container global.CheckpointContainer
@@ -83,7 +93,11 @@ func DecisionCheckpoint(resultChan1 chan global.CheckpointContainer, resultChan2
 	wg.Wait()
 }
 
-func AppendToCheckpointList(pauseContainer global.PauseContainer, checkpointContainerList []global.CheckpointContainer) bool {
+func AppendToCheckpointList(systemInfoSet []global.SystemInfo, pauseContainer global.PauseContainer, checkpointContainerList []global.CheckpointContainer) bool {
+	if int64(systemInfoSet[len(systemInfoSet)-1].Memory.Used) > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD2) {
+		return true
+	}
+
 	res := pauseContainer.ContainerData.Resource
 	if pauseContainer.IsCheckpoint || res[len(res)-1].ConMemUtil <= global.CHECKPOINT_THRESHOLD {
 		return false
