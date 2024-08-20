@@ -26,7 +26,7 @@ func CreateImageContainer(resultChan chan global.CheckpointContainer, client int
 	for _, repairContainer := range removeContainerList {
 		// 비동기 구현
 		go func(container global.CheckpointContainer) {
-			if container.DuringCreateImages || container.CreateImages {
+			if container.DuringCreateImages || container.CreateImages || container.DuringCreateContainer || container.CreateContainer {
 				return
 			}
 			container.DuringCreateImages = true
@@ -121,6 +121,7 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 			}
 
 			container.StartRepairTime = time.Now().Unix()
+			container.CreateImages = false
 			container.DuringCreateContainer = true
 			resultChan <- container
 
