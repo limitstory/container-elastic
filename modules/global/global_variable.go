@@ -22,7 +22,7 @@ const CONTAINER_MEMORY_SLO_UPPER float64 = 0.80
 const CONTAINER_MEMORY_SLO float64 = 0.75
 const CONTAINER_MEMORY_SLO_LOWER float64 = 0.70
 
-const CHECKPOINT_THRESHOLD float64 = 0.85
+const CHECKPOINT_THRESHOLD float64 = 0.82
 const RECHECKPOINT_THRESHOLD int64 = 120
 
 const MAX_MEMORY_USAGE_THRESHOLD float64 = 0.92
@@ -97,8 +97,9 @@ type CheckpointContainer struct {
 	DuringCheckpoint      bool
 	AbortedCheckpoint     bool
 	IsCheckpoint          bool
+	DuringCreateImages    bool
+	CreateImages          bool
 	DuringCreateContainer bool
-	CreatingContainer     bool
 	CreateContainer       bool
 	StartCheckpointTime   int64
 	EndCheckpointTime     int64

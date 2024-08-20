@@ -36,7 +36,7 @@ func main() {
 	repairCandidateToChan := make(chan global.CheckpointContainer, 100)
 
 	// 동시에 실행할 고루틴 수를 제한하는 채널(세마포어 역할)
-	semaphore := make(chan struct{}, 3) // 최대 3개의 고루틴만 동시에 실행
+	semaphore := make(chan struct{}, 4) // 최대 4개의 고루틴만 동시에 실행
 
 	priorityMap := make(map[string]global.PriorityContainer)
 	var sortPriority []string
@@ -174,10 +174,14 @@ func main() {
 					}
 				case container2 := <-repairCandidateToChan:
 					for i, removeContainer := range removeContainerList {
-						if container2.PodName == removeContainer.PodName && (container2.DuringCreateContainer || container2.CreatingContainer) {
+						if container2.PodName == removeContainer.PodName && (container2.DuringCreateImages || container2.CreateImages || container2.DuringCreateContainer) {
 							removeContainerList[i] = container2
 							break
 						} else if container2.PodName == removeContainer.PodName && container2.CreateContainer {
+							defer func() {
+								v := recover()
+								fmt.Println("recovered:", v)
+							}()
 							var podRemoveTime global.RemoveTime
 							var podRepairTime global.RepairTime
 

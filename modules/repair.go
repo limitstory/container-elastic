@@ -18,14 +18,32 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 
 	var mem int64
 	var wg sync.WaitGroup
-	var count int
 	var repairContainerCandidateList []global.CheckpointContainer
 
-	copyRemoveContainerList := removeContainerList
+	wg.Add(len(removeContainerList))
+	for _, repairContainer := range removeContainerList {
+		// 비동기 구현
+		go func(container global.CheckpointContainer) {
+			if container.DuringCreateImages || container.CreateImages {
+				return
+			}
+			container.DuringCreateImages = true
+			resultChan <- container
 
-	if len(copyRemoveContainerList) == 0 {
-		return
+			for {
+				if cp.MakeContainerFromCheckpoint(container) {
+					break
+				} else {
+					time.Sleep(time.Second)
+				}
+			}
+
+			container.DuringCreateImages = false
+			container.CreateImages = true
+			resultChan <- container
+		}(repairContainer)
 	}
+	wg.Wait()
 
 	// FIFO 구조로 일단 짰으며, 이 부분은 고민이 필요함.
 	// 먼저 들어오고 먼저 나가는 방식이 아니라 메모리 조건 만족하면 바로 나갈 수 있게끔??00000
@@ -49,62 +67,60 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 			}
 		}*/
 
+	var copyRemoveContainerList []global.CheckpointContainer
+
+	for _, repairContainer := range removeContainerList {
+		if repairContainer.CreateImages {
+			copyRemoveContainerList = append(copyRemoveContainerList, repairContainer)
+		}
+	}
+
+	if len(copyRemoveContainerList) == 0 {
+		return
+	}
+
 	sumLimitMemorySize := int64(systemInfoSet[len(systemInfoSet)-1].Memory.Used)
 
-	for {
-		if len(copyRemoveContainerList) == 0 {
-			break
-		}
-		mem += int64(float64(copyRemoveContainerList[0].CheckpointData.MemoryLimitInBytes) * 1.1)
+	if sumLimitMemorySize > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_REPAIR_MEMORY_USAGE_THRESHOLD) {
+		for {
+			if len(copyRemoveContainerList) == 0 {
+				break
+			}
+			mem += int64(float64(copyRemoveContainerList[0].CheckpointData.MemoryLimitInBytes) * 1.1)
 
-		if mem+sumLimitMemorySize > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_REPAIR_MEMORY_USAGE_THRESHOLD) {
-			break
-		}
-		repairContainerCandidateList = append(repairContainerCandidateList, copyRemoveContainerList[0])
-		resultChan <- copyRemoveContainerList[0]
-		if len(copyRemoveContainerList) == 1 {
-			break
-		}
-		copyRemoveContainerList = copyRemoveContainerList[1 : len(copyRemoveContainerList)-1]
-	}
-
-	for _, container := range repairContainerCandidateList {
-		if (container.DuringCreateContainer == false) && (container.CreateContainer == false) {
-			count++
+			if mem+sumLimitMemorySize > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD) {
+				break
+			}
+			repairContainerCandidateList = append(repairContainerCandidateList, copyRemoveContainerList[0])
+			resultChan <- copyRemoveContainerList[0]
+			if len(copyRemoveContainerList) == 1 {
+				break
+			}
+			copyRemoveContainerList = copyRemoveContainerList[1 : len(copyRemoveContainerList)-1]
 		}
 	}
 
-	wg.Add(count)
+	wg.Add(len(copyRemoveContainerList))
 	for _, repairContainerCandidate := range repairContainerCandidateList {
-		if repairContainerCandidate.DuringCreateContainer || repairContainerCandidate.CreateContainer {
-			continue
-		}
+		defer wg.Done()
 		// 비동기 구현
 		go func(container global.CheckpointContainer) {
-			container.DuringCreateContainer = true
-			resultChan <- container
-
-			container.StartRepairTime = time.Now().Unix()
-			for {
-				if cp.MakeContainerFromCheckpoint(container) {
-					break
-				} else {
-					time.Sleep(time.Second)
-				}
+			if container.DuringCreateContainer || container.CreateContainer {
+				return
 			}
 
-			container.DuringCreateContainer = false
-			container.CreatingContainer = true
+			container.StartRepairTime = time.Now().Unix()
+			container.DuringCreateContainer = true
 			resultChan <- container
 
 			repairRequestMemory := int64(float64(container.CheckpointData.MemoryLimitInBytes) * 1.1) // 실제 할당되어야 하는 메모리 크기...
 			// 그렇다고 이걸 컨테이너 명령어로 할 수 없음. 이는 request이상을 받지 못함을 보장함
 
-			repairContainerCandidate.CheckpointData.RemoveEndTime = time.Now().Unix()
+			container.CheckpointData.RemoveEndTime = time.Now().Unix()
 			RestoreContainer(container)
 			podInfoSet = UpdatePodData(client, container, podIndex, podInfoSet, repairRequestMemory)
 
-			container.CreatingContainer = false
+			container.DuringCreateContainer = false
 			container.CreateContainer = true
 
 			container.EndRepairTime = time.Now().Unix()

@@ -25,7 +25,7 @@ func DecisionCheckpoint(systemInfoSet []global.SystemInfo, resultChan1 chan glob
 				checkpointCount++
 			}
 		}
-		if checkpointCount >= 3 {
+		if checkpointCount >= 4 {
 			break
 		}
 
@@ -33,6 +33,10 @@ func DecisionCheckpoint(systemInfoSet []global.SystemInfo, resultChan1 chan glob
 
 		if isAppend {
 			var container global.CheckpointContainer
+
+			if count >= 4 {
+				break
+			}
 
 			container.PodName = pauseContainer.PodName
 			container.PodId = pauseContainer.PodId
@@ -94,9 +98,10 @@ func DecisionCheckpoint(systemInfoSet []global.SystemInfo, resultChan1 chan glob
 }
 
 func AppendToCheckpointList(systemInfoSet []global.SystemInfo, pauseContainer global.PauseContainer, checkpointContainerList []global.CheckpointContainer) bool {
-	if int64(systemInfoSet[len(systemInfoSet)-1].Memory.Used) > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD2) {
-		return true
-	}
+	/*
+		if int64(systemInfoSet[len(systemInfoSet)-1].Memory.Used) > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_MEMORY_USAGE_THRESHOLD2) {
+			return true
+		}*/
 
 	res := pauseContainer.ContainerData.Resource
 	if pauseContainer.IsCheckpoint || res[len(res)-1].ConMemUtil <= global.CHECKPOINT_THRESHOLD {
