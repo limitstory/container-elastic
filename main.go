@@ -36,7 +36,7 @@ func main() {
 	repairCandidateToChan := make(chan global.CheckpointContainer, 100)
 
 	// 동시에 실행할 고루틴 수를 제한하는 채널(세마포어 역할)
-	semaphore := make(chan struct{}, 4) // 최대 4개의 고루틴만 동시에 실행
+	semaphore := make(chan struct{}, 3) // 최대 4개의 고루틴만 동시에 실행
 
 	priorityMap := make(map[string]global.PriorityContainer)
 	var sortPriority []string
@@ -117,6 +117,10 @@ func main() {
 					}
 
 				case container2 := <-modifyCheckpointContainerToChan:
+					defer func() {
+						v := recover()
+						fmt.Println("recovered:", v)
+					}()
 					for i, checkpointContainer := range checkpointContainerList {
 						if container2.PodName == checkpointContainer.PodName {
 							checkpointContainerList[i] = container2
@@ -199,6 +203,8 @@ func main() {
 				}
 			}
 		}()
+		go mod.CreateImageContainer(repairCandidateToChan, client, systemInfoSet, podIndex, podInfoSet, currentRunningPods,
+			len(currentRunningPods), priorityMap, removeContainerList)
 		go mod.DecisionRepairContainer(repairCandidateToChan, client, systemInfoSet, podIndex, podInfoSet, currentRunningPods,
 			len(currentRunningPods), priorityMap, removeContainerList)
 

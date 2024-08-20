@@ -12,13 +12,15 @@ import (
 	internalapi "k8s.io/cri-api/pkg/apis"
 )
 
-func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client internalapi.RuntimeService, systemInfoSet []global.SystemInfo, podIndex map[string]int64,
+func CreateImageContainer(resultChan chan global.CheckpointContainer, client internalapi.RuntimeService, systemInfoSet []global.SystemInfo, podIndex map[string]int64,
 	podInfoSet []global.PodData, currentRunningPods []string, lenghOfCurrentRunningPods int, priorityMap map[string]global.PriorityContainer,
 	removeContainerList []global.CheckpointContainer) {
-
-	var mem int64
 	var wg sync.WaitGroup
-	var repairContainerCandidateList []global.CheckpointContainer
+
+	sumLimitMemorySize := int64(systemInfoSet[len(systemInfoSet)-1].Memory.Used)
+	if sumLimitMemorySize > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.CREATE_IMAGE_THRESHOLD) {
+		return
+	}
 
 	wg.Add(len(removeContainerList))
 	for _, repairContainer := range removeContainerList {
@@ -44,6 +46,15 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 		}(repairContainer)
 	}
 	wg.Wait()
+}
+
+func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client internalapi.RuntimeService, systemInfoSet []global.SystemInfo, podIndex map[string]int64,
+	podInfoSet []global.PodData, currentRunningPods []string, lenghOfCurrentRunningPods int, priorityMap map[string]global.PriorityContainer,
+	removeContainerList []global.CheckpointContainer) {
+
+	var mem int64
+	var wg sync.WaitGroup
+	var repairContainerCandidateList []global.CheckpointContainer
 
 	// FIFO 구조로 일단 짰으며, 이 부분은 고민이 필요함.
 	// 먼저 들어오고 먼저 나가는 방식이 아니라 메모리 조건 만족하면 바로 나갈 수 있게끔??00000
