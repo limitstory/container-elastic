@@ -12,14 +12,14 @@ import (
 
 func MonitoringPodResources(client internalapi.RuntimeService, podIndex map[string]int64, podInfoSet []global.PodData,
 	currentRunningPods []string, systemInfoSet []global.SystemInfo, checkpointContainerList []global.CheckpointContainer,
-	removeContainerList []global.CheckpointContainer, avgCheckpointTime []global.CheckpointTime, avgRepairTime []global.RepairTime,
+	removeContainerList []global.CheckpointContainer, avgCheckpointTime []global.CheckpointTime, avgImageTime []global.ImageTime,
 	avgRemoveTime []global.RemoveTime, resultChan chan global.CheckpointContainer) ([]global.PodData, []string) {
 	//var containerResourceSet = make([]*pb.ContainerResources, 0) //Dynamic array to store container system metric
 
 	// Slice operates on pointer basis(call by reference).
 	// get pod stats
 	podInfoSet, currentRunningPods = GetPodStatsInfo(client, systemInfoSet, podIndex, podInfoSet, currentRunningPods,
-		checkpointContainerList, removeContainerList, avgCheckpointTime, avgRepairTime, avgRemoveTime, resultChan)
+		checkpointContainerList, removeContainerList, avgCheckpointTime, avgImageTime, avgRemoveTime, resultChan)
 
 	for _, podName := range currentRunningPods {
 		pod := podInfoSet[podIndex[podName]]

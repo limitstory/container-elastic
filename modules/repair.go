@@ -3,6 +3,7 @@ package modules
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +33,7 @@ func CreateImageContainer(resultChan chan global.CheckpointContainer, client int
 			container.DuringCreateImages = true
 			resultChan <- container
 
+			container.StartImageTime = time.Now().Unix()
 			for {
 				if cp.MakeContainerFromCheckpoint(container) {
 					break
@@ -39,6 +41,7 @@ func CreateImageContainer(resultChan chan global.CheckpointContainer, client int
 					time.Sleep(time.Second)
 				}
 			}
+			container.EndImageTime = time.Now().Unix()
 
 			container.DuringCreateImages = false
 			container.CreateImages = true
@@ -92,7 +95,7 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 
 	sumLimitMemorySize := int64(systemInfoSet[len(systemInfoSet)-1].Memory.Used)
 
-	if sumLimitMemorySize > int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_REPAIR_MEMORY_USAGE_THRESHOLD) {
+	if sumLimitMemorySize < int64(float64(systemInfoSet[len(systemInfoSet)-1].Memory.Total)*global.MAX_REPAIR_MEMORY_USAGE_THRESHOLD) {
 		for {
 			if len(copyRemoveContainerList) == 0 {
 				break
@@ -111,7 +114,7 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 		}
 	}
 
-	wg.Add(len(copyRemoveContainerList))
+	wg.Add(len(repairContainerCandidateList))
 	for _, repairContainerCandidate := range repairContainerCandidateList {
 		defer wg.Done()
 		// 비동기 구현
@@ -120,7 +123,6 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 				return
 			}
 
-			container.StartRepairTime = time.Now().Unix()
 			container.CreateImages = false
 			container.DuringCreateContainer = true
 			resultChan <- container
@@ -128,14 +130,27 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 			repairRequestMemory := int64(float64(container.CheckpointData.MemoryLimitInBytes) * 1.1) // 실제 할당되어야 하는 메모리 크기...
 			// 그렇다고 이걸 컨테이너 명령어로 할 수 없음. 이는 request이상을 받지 못함을 보장함
 
-			container.CheckpointData.RemoveEndTime = time.Now().Unix()
-			RestoreContainer(container)
-			podInfoSet = UpdatePodData(client, container, podIndex, podInfoSet, repairRequestMemory)
+			for {
+				RestoreContainer(container)
+				command := "kubectl get po " + container.PodName
+				out, _ := exec.Command("bash", "-c", command).Output()
+				strout := string(out[:])
+				time.Sleep(time.Second)
+				if strings.Contains(strout, "Outofmemory") {
+					// 컨테이너 삭제
+					command := "kubectl delete po " + container.PodName
+					out, _ := exec.Command("bash", "-c", command).Output()
+					strout := string(out[:])
+					fmt.Println(strout)
+				} else {
+					container.CheckpointData.RemoveEndTime = time.Now().Unix()
+					podInfoSet = UpdatePodData(client, container, podIndex, podInfoSet, repairRequestMemory)
+					break
+				}
+			}
 
 			container.DuringCreateContainer = false
 			container.CreateContainer = true
-
-			container.EndRepairTime = time.Now().Unix()
 
 			resultChan <- container
 

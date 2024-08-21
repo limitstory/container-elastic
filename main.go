@@ -27,7 +27,7 @@ func main() {
 	var removeContainerList []global.CheckpointContainer
 
 	var avgCheckpointTime []global.CheckpointTime
-	var avgRepairTime []global.RepairTime
+	var avgImageTime []global.ImageTime
 	var avgRemoveTime []global.RemoveTime
 
 	appendCheckpointContainerToChan := make(chan global.CheckpointContainer, 100)
@@ -66,7 +66,7 @@ func main() {
 		systemInfoSet = mod.GetSystemStatsInfo(systemInfoSet)
 
 		podInfoSet, currentRunningPods = mod.MonitoringPodResources(client, podIndex, podInfoSet, currentRunningPods, systemInfoSet,
-			checkpointContainerList, removeContainerList, avgCheckpointTime, avgRepairTime, avgRemoveTime, removeContainerToChan)
+			checkpointContainerList, removeContainerList, avgCheckpointTime, avgImageTime, avgRemoveTime, removeContainerToChan)
 
 		/*
 			for i := 0; i < len(currentRunningPods); i++ {
@@ -187,15 +187,15 @@ func main() {
 								fmt.Println("recovered:", v)
 							}()
 							var podRemoveTime global.RemoveTime
-							var podRepairTime global.RepairTime
+							var podImageTime global.ImageTime
 
 							podRemoveTime.PodName = container2.PodName
 							podRemoveTime.RemoveTime = time.Now().Unix() - container2.StartRemoveTime
 							avgRemoveTime = append(avgRemoveTime, podRemoveTime)
 
-							podRepairTime.PodName = container2.PodName
-							podRepairTime.RepairTime = container2.EndRepairTime - container2.StartRepairTime
-							avgRepairTime = append(avgRepairTime, podRepairTime)
+							podImageTime.PodName = container2.PodName
+							podImageTime.ImageTime = container2.StartImageTime - container2.EndImageTime
+							avgImageTime = append(avgImageTime, podImageTime)
 							removeContainerList = append(removeContainerList[:i], removeContainerList[i+1:]...)
 							break
 						}

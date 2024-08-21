@@ -25,11 +25,11 @@ const CONTAINER_MEMORY_SLO_LOWER float64 = 0.70
 const CHECKPOINT_THRESHOLD float64 = 0.82
 const RECHECKPOINT_THRESHOLD int64 = 120
 
-const MAX_MEMORY_USAGE_THRESHOLD float64 = 0.92
+const MAX_MEMORY_USAGE_THRESHOLD float64 = 0.90
 const MAX_MEMORY_USAGE_THRESHOLD2 float64 = 0.95
 
-const CREATE_IMAGE_THRESHOLD float64 = 0.9
-const MAX_REPAIR_MEMORY_USAGE_THRESHOLD float64 = 0.70
+const CREATE_IMAGE_THRESHOLD float64 = 0.88
+const MAX_REPAIR_MEMORY_USAGE_THRESHOLD float64 = 0.80
 
 const SACLE_WEIGHT = 60
 
@@ -53,9 +53,9 @@ type CheckpointTime struct {
 	CheckpointTime int64
 }
 
-type RepairTime struct {
-	PodName    string
-	RepairTime int64
+type ImageTime struct {
+	PodName   string
+	ImageTime int64
 }
 
 type RemoveTime struct {
@@ -107,8 +107,8 @@ type CheckpointContainer struct {
 	EndCheckpointTime     int64
 	StartRemoveTime       int64
 	EndREmoveTime         int64
-	StartRepairTime       int64
-	EndRepairTime         int64
+	StartImageTime        int64
+	EndImageTime          int64
 	ContainerData         *ContainerData
 	CheckpointData        CheckpointMetaData
 }
