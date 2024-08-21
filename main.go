@@ -194,7 +194,7 @@ func main() {
 							avgRemoveTime = append(avgRemoveTime, podRemoveTime)
 
 							podImageTime.PodName = container2.PodName
-							podImageTime.ImageTime = container2.StartImageTime - container2.EndImageTime
+							podImageTime.ImageTime = container2.EndImageTime - container2.StartImageTime
 							avgImageTime = append(avgImageTime, podImageTime)
 							removeContainerList = append(removeContainerList[:i], removeContainerList[i+1:]...)
 							break

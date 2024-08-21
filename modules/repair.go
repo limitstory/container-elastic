@@ -136,7 +136,7 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 				out, _ := exec.Command("bash", "-c", command).Output()
 				strout := string(out[:])
 				time.Sleep(time.Second)
-				if strings.Contains(strout, "Outofmemory") {
+				if strings.Contains(strout, "OutOfmemory") {
 					// 컨테이너 삭제
 					command := "kubectl delete po " + container.PodName
 					out, _ := exec.Command("bash", "-c", command).Output()
@@ -182,7 +182,7 @@ spec:
 EOF`, container.PodName, container.ContainerName, container.PodName, global.MIN_SIZE_PER_CONTAINER,
 		float64(global.DEFAULT_CPU_QUOTA)*0.00001, global.MAX_SIZE_PER_CONTAINER, global.NODENAME)
 
-	fmt.Println(command)
+	//fmt.Println(command)
 
 	//command1 := "kubectl create -f - <<EOF\napiVersion: v1\nkind: Pod\nmetadata:\n  name: " + container.PodName + "\n"
 	//command2 := "spec:\n  containers:\n  - name: " + container.ContainerName + "\n    image: localhost/" + container.PodName + ":latest\n    "

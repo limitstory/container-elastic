@@ -683,7 +683,7 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 
 	fmt.Println("AverageCheckpointTime: ", float64(sumAvgCheckpointTime)/float64(len(avgCheckpointTime)))
 	fmt.Println(checkpointTimeArr)
-	fmt.Println("AverageImageTImeTime: ", float64(sumAvgImageTime)/float64(len(avgImageTime)))
+	fmt.Println("AverageImageTime: ", float64(sumAvgImageTime)/float64(len(avgImageTime)))
 	fmt.Println(imageTimeArr)
 }
 
