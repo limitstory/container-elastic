@@ -29,6 +29,7 @@ func main() {
 	var avgCheckpointTime []global.CheckpointTime
 	var avgImageTime []global.ImageTime
 	var avgRemoveTime []global.RemoveTime
+	var avgRepairTime []global.RepairTime
 
 	appendCheckpointContainerToChan := make(chan global.CheckpointContainer, 100)
 	modifyCheckpointContainerToChan := make(chan global.CheckpointContainer, 100)
@@ -36,7 +37,7 @@ func main() {
 	repairCandidateToChan := make(chan global.CheckpointContainer, 100)
 
 	// 동시에 실행할 고루틴 수를 제한하는 채널(세마포어 역할)
-	semaphore := make(chan struct{}, 3) // 최대 4개의 고루틴만 동시에 실행
+	semaphore := make(chan struct{}, 2) // 최대 4개의 고루틴만 동시에 실행
 
 	priorityMap := make(map[string]global.PriorityContainer)
 	var sortPriority []string
@@ -188,6 +189,7 @@ func main() {
 							}()
 							var podRemoveTime global.RemoveTime
 							var podImageTime global.ImageTime
+							var podRepairTime global.RepairTime
 
 							podRemoveTime.PodName = container2.PodName
 							podRemoveTime.RemoveTime = time.Now().Unix() - container2.StartRemoveTime
@@ -196,6 +198,9 @@ func main() {
 							podImageTime.PodName = container2.PodName
 							podImageTime.ImageTime = container2.EndImageTime - container2.StartImageTime
 							avgImageTime = append(avgImageTime, podImageTime)
+							podRepairTime.PodName = container2.PodName
+							podRepairTime.RepairTime = container2.EndRepairTime - container2.StartRepairTime
+							avgRepairTime = append(avgRepairTime, podRepairTime)
 							removeContainerList = append(removeContainerList[:i], removeContainerList[i+1:]...)
 							break
 						}

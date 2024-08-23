@@ -41,7 +41,7 @@ func GetListPodStatsInfo(client internalapi.RuntimeService) ([]*pb.PodSandboxSta
 
 func GetPodStatsInfo(client internalapi.RuntimeService, systemInfoSet []global.SystemInfo, podIndex map[string]int64, podInfoSet []global.PodData, currentRunningPods []string,
 	checkpointContainerList []global.CheckpointContainer, removeContainerList []global.CheckpointContainer, avgCheckpointTime []global.CheckpointTime,
-	avgImageTime []global.ImageTime, avgRemoveTime []global.RemoveTime, resultChan chan global.CheckpointContainer) ([]global.PodData, []string) {
+	avgImageTime []global.ImageTime, avgRemoveTime []global.RemoveTime, avgRepairTime []global.RepairTime, resultChan chan global.CheckpointContainer) ([]global.PodData, []string) {
 
 	isPodRunning := false
 
@@ -96,7 +96,7 @@ func GetPodStatsInfo(client internalapi.RuntimeService, systemInfoSet []global.S
 	if !isPodRunning {
 		fmt.Println("There is no pod running.")
 
-		PrintResult(systemInfoSet, podInfoSet, podIndex, avgCheckpointTime, avgImageTime, avgRemoveTime)
+		PrintResult(systemInfoSet, podInfoSet, podIndex, avgCheckpointTime, avgImageTime, avgRemoveTime, avgRepairTime)
 
 		os.Exit(0)
 	}
@@ -189,7 +189,7 @@ func getContainerStatsInfo(client internalapi.RuntimeService, podStats *pb.PodSa
 				if podName == checkpointContainer.PodName && checkpointContainer.IsCheckpoint {
 					RemoveContainer(client, podName)
 					checkpointContainer.CheckpointData.RemoveStartTime = time.Now().Unix()
-					checkpointContainer.ContainerData.NumOfRemove++
+					//checkpointContainer.ContainerData.NumOfRemove++
 					resultChan <- checkpointContainer
 
 					return false
@@ -534,7 +534,7 @@ func GetSystemStatsInfo(systemInfoSet []global.SystemInfo) []global.SystemInfo {
 }
 
 func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData, podIndex map[string]int64,
-	avgCheckpointTime []global.CheckpointTime, avgImageTime []global.ImageTime, avgRemoveTime []global.RemoveTime) {
+	avgCheckpointTime []global.CheckpointTime, avgImageTime []global.ImageTime, avgRemoveTime []global.RemoveTime, avgRepairTime []global.RepairTime) {
 	// 성능측정지표를 여기에서 print하도록
 	var pods *v1.PodList
 	var err error
@@ -546,11 +546,13 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 
 	var sumAvgCheckpointTime int64
 	var sumAvgImageTime int64
+	var sumAvgRepairTime int64
 
 	var runningTimeArr []int64
 	var waitTimeArr []int64
 	var checkpointTimeArr []int64
 	var imageTimeArr []int64
+	var repairTimeArr []int64
 
 	var startedTestTime int64 = 9999999999999
 	var finishedTestTime int64 = 0
@@ -612,6 +614,7 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 
 		if collectPodInfo.Container[0].NumOfRemove != 0 {
 			newPod.RestartCount = int32(collectPodInfo.Container[0].PastAttempt) + int32(collectPodInfo.Container[0].NumOfRemove)
+			fmt.Println(collectPodInfo.Container[0].PastAttempt, ", ", collectPodInfo.Container[0].NumOfRemove)
 		} else {
 			newPod.RestartCount = int32(collectPodInfo.Container[0].Attempt)
 		}
@@ -671,6 +674,11 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 		imageTimeArr = append(imageTimeArr, time.ImageTime)
 	}
 
+	for _, time := range avgRepairTime {
+		sumAvgRepairTime += time.RepairTime
+		repairTimeArr = append(repairTimeArr, time.RepairTime)
+	}
+
 	fmt.Println("TotalRunningTime: ", finishedTestTime-startedTestTime)
 	fmt.Println("RestartLog: ", restartLog)
 	fmt.Println("TotalContainerRestart: ", restartSum)
@@ -685,6 +693,8 @@ func PrintResult(systemInfoSet []global.SystemInfo, podInfoSet []global.PodData,
 	fmt.Println(checkpointTimeArr)
 	fmt.Println("AverageImageTime: ", float64(sumAvgImageTime)/float64(len(avgImageTime)))
 	fmt.Println(imageTimeArr)
+	fmt.Println("AverageRepairTime: ", float64(sumAvgRepairTime)/float64(len(avgRepairTime)))
+	fmt.Println(repairTimeArr)
 }
 
 func IsSucceed(podsItems []v1.Pod) bool {

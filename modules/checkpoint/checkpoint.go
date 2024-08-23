@@ -25,7 +25,7 @@ func DecisionCheckpoint(systemInfoSet []global.SystemInfo, resultChan1 chan glob
 				checkpointCount++
 			}
 		}
-		if checkpointCount >= 3 {
+		if checkpointCount >= 2 {
 			break
 		}
 
@@ -34,7 +34,7 @@ func DecisionCheckpoint(systemInfoSet []global.SystemInfo, resultChan1 chan glob
 		if isAppend {
 			var container global.CheckpointContainer
 
-			if count >= 3 {
+			if count >= 2 {
 				break
 			}
 

@@ -132,19 +132,23 @@ func DecisionRepairContainer(resultChan chan global.CheckpointContainer, client 
 
 			for {
 				RestoreContainer(container)
+				time.Sleep(time.Second)
 				command := "kubectl get po " + container.PodName
 				out, _ := exec.Command("bash", "-c", command).Output()
 				strout := string(out[:])
-				time.Sleep(time.Second)
 				if strings.Contains(strout, "OutOfmemory") {
 					// 컨테이너 삭제
 					command := "kubectl delete po " + container.PodName
 					out, _ := exec.Command("bash", "-c", command).Output()
 					strout := string(out[:])
-					fmt.Println(strout)
+					if len(strout) == 0 {
+						fmt.Println(strout)
+					}
 				} else {
 					container.CheckpointData.RemoveEndTime = time.Now().Unix()
+					container.StartRepairTime = time.Now().Unix()
 					podInfoSet = UpdatePodData(client, container, podIndex, podInfoSet, repairRequestMemory)
+					container.EndRepairTime = time.Now().Unix()
 					break
 				}
 			}

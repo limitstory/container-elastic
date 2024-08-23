@@ -25,17 +25,17 @@ const CONTAINER_MEMORY_SLO_LOWER float64 = 0.70
 const CHECKPOINT_THRESHOLD float64 = 0.82
 const RECHECKPOINT_THRESHOLD int64 = 120
 
-const MAX_MEMORY_USAGE_THRESHOLD float64 = 0.90
+const MAX_MEMORY_USAGE_THRESHOLD float64 = 0.95
 const MAX_MEMORY_USAGE_THRESHOLD2 float64 = 0.95
 
-const CREATE_IMAGE_THRESHOLD float64 = 0.88
+const CREATE_IMAGE_THRESHOLD float64 = 0.90
 const MAX_REPAIR_MEMORY_USAGE_THRESHOLD float64 = 0.80
 
 const SACLE_WEIGHT = 60
 
 const CONTAINER_MEMORY_USAGE_THRESHOLD float64 = 0.90
 
-const MIN_SIZE_PER_CONTAINER int64 = 800 * 1048576  // 1Mibibyte = 1024*1024 = 1048576
+const MIN_SIZE_PER_CONTAINER int64 = 900 * 1048576  // 1Mibibyte = 1024*1024 = 1048576
 const MAX_SIZE_PER_CONTAINER int64 = 1300 * 1048576 // 1Mibibyte = 1024*1024 = 1048576
 
 const MIN_SCALE_SIZE int64 = 100 * 1048576 // 1Mibibyte = 1024*1024 = 1048576
@@ -61,6 +61,11 @@ type ImageTime struct {
 type RemoveTime struct {
 	PodName    string
 	RemoveTime int64
+}
+
+type RepairTime struct {
+	PodName    string
+	RepairTime int64
 }
 
 type PriorityContainer struct {
@@ -109,6 +114,8 @@ type CheckpointContainer struct {
 	EndREmoveTime         int64
 	StartImageTime        int64
 	EndImageTime          int64
+	StartRepairTime       int64
+	EndRepairTime         int64
 	ContainerData         *ContainerData
 	CheckpointData        CheckpointMetaData
 }
