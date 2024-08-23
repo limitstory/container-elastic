@@ -67,7 +67,7 @@ func main() {
 		systemInfoSet = mod.GetSystemStatsInfo(systemInfoSet)
 
 		podInfoSet, currentRunningPods = mod.MonitoringPodResources(client, podIndex, podInfoSet, currentRunningPods, systemInfoSet,
-			checkpointContainerList, removeContainerList, avgCheckpointTime, avgImageTime, avgRemoveTime, removeContainerToChan)
+			checkpointContainerList, removeContainerList, avgCheckpointTime, avgImageTime, avgRemoveTime, avgRepairTime, removeContainerToChan)
 
 		/*
 			for i := 0; i < len(currentRunningPods); i++ {
